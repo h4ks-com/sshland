@@ -19,7 +19,7 @@ func getEnv(key string, defaultValue string) string {
 }
 
 func sshInto(s io.Writer, username string, host string, port string) {
-	cmd := exec.Command("ssh", "-p", port, username+"@"+host)
+	cmd := exec.Command("ssh", "-tt", "-o", "StrictHostKeyChecking=no", "-p", port, username+"@"+host)
 	cmd.Stdout = s
 	cmd.Stderr = s
 	error := cmd.Run()
