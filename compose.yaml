@@ -6,10 +6,17 @@ services:
     restart: always
     env_file: .env
     ports:
-      - "${SSH_LISTEN_HOST}:${SSH_LISTEN_PORT}"
+      - "${SSH_LISTEN_PORT}:${SSH_LISTEN_PORT}"
+    environment:
+      - SSH_CHAT_HOST=sshchat
+      - SSH_CHAT_PORT=22
 
   sshchat:
     build:
       context: ./
       dockerfile: ./docker/sshchat/Dockerfile
     restart: always
+    ports:
+      - "${SSH_CHAT_PORT}:${SSH_CHAT_PORT}"
+    volumes:
+        - '${DATA_DIR}:/root/.ssh/'

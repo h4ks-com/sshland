@@ -17,3 +17,9 @@ Modify what you need or just use env variables instead.
 go mod download
 go run main.go
 ```
+
+That will run the menu. To run the whole stack with the apps you better off using docker-compose.
+
+```bash
+docker compose up
+```
