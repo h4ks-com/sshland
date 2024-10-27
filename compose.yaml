@@ -1,0 +1,15 @@
+services:
+  server:
+    build:
+      context: ./
+      dockerfile: ./docker/Dockerfile
+    restart: always
+    env_file: .env
+    ports:
+      - "${SSH_LISTEN_HOST}:${SSH_LISTEN_PORT}"
+
+  sshchat:
+    build:
+      context: ./
+      dockerfile: ./docker/sshchat/Dockerfile
+    restart: always
