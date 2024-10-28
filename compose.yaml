@@ -4,19 +4,40 @@ services:
       context: ./
       dockerfile: ./docker/Dockerfile
     restart: always
+    stdin_open: true
+    tty: true
     env_file: .env
     ports:
       - "${SSH_LISTEN_PORT}:${SSH_LISTEN_PORT}"
     environment:
       - SSH_CHAT_HOST=sshchat
       - SSH_CHAT_PORT=2022
+      - HANB_HOST=hanb
+      - HANB_PORT=22
+    # volumes:
+    #     - '${DATA_DIR}:/root/.ssh/'
 
   sshchat:
     build:
       context: ./
       dockerfile: ./docker/sshchat/Dockerfile
     restart: always
+    stdin_open: true
+    tty: true
     ports:
-      - "${SSH_CHAT_PORT}:${SSH_CHAT_PORT}"
+      - "${SSH_CHAT_PORT}:2022"
+    volumes:
+        - '${DATA_DIR}:/root/.ssh/'
+
+  hanb:
+    build:
+      context: ./
+      dockerfile: ./docker/hanb/Dockerfile
+    restart: always
+    stdin_open: true
+    tty: true
+    environment:
+      - SSH_LISTEN_PORT=22
+      - SSH_LISTEN_HOST=0.0.0.0
     volumes:
         - '${DATA_DIR}:/root/.ssh/'
