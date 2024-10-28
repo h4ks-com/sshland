@@ -142,6 +142,8 @@ func main() {
 
 	ssh.Handle(func(s ssh.Session) {
 		for {
+			// Clear terminal
+			write(s, "\033[H\033[2J")
 			write(s, "Welcome to the SSH server "+s.User()+"!\n")
 			prompt := promptui.Select{
 				Label:  "Select option:",
