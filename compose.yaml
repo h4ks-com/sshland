@@ -10,8 +10,8 @@ services:
     ports:
       - "${SSH_LISTEN_PORT}:${SSH_LISTEN_PORT}"
     environment:
-      - SSH_CHAT_HOST=sshchat
-      - SSH_CHAT_PORT=2022
+      - SSH_CHAT_HOST=${SSH_CHAT_HOST}
+      - SSH_CHAT_PORT=${SSH_CHAT_PORT}
       - HANB_HOST=hanb
       - HANB_PORT=22
     # volumes:
