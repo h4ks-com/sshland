@@ -142,7 +142,7 @@ func main() {
 
 	ssh.Handle(func(s ssh.Session) {
 		for {
-			write(s, "Welcome to the SSH server\n\n")
+			write(s, "Welcome to the SSH server "+s.User()+"!\n")
 			prompt := promptui.Select{
 				Label:  "Select option:",
 				Items:  []string{"Chat", "hanb", "Exit"},
