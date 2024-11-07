@@ -12,6 +12,7 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
+	ctxio "github.com/jbenet/go-context/io"
 	"github.com/joho/godotenv"
 	"github.com/manifoldco/promptui"
 	"golang.org/x/term"
@@ -36,11 +37,11 @@ func runCommand(s ssh.Session, command string, args ...string) error {
 	if isPty {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		// cmd.Stderr = s.Stderr()
 		f, err := pty.Start(cmd)
 		if err != nil {
 			write(s, "Error starting command: "+err.Error())
-			cancel()
 			return err
 		}
 		defer func() { _ = f.Close() }() // Best effort.
@@ -61,30 +62,22 @@ func runCommand(s ssh.Session, command string, args ...string) error {
 		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 		if err != nil {
 			log.Printf("Error making raw: %s", err.Error())
-			cancel()
 			return err
 		}
 		defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }() // Best effort.
-		go func(ctx context.Context) {
-			for {
-				select {
-				case <-ctx.Done():
-					println("ctx.Done")
-					return
-				default:
-					_, err := io.Copy(f, s) // stdin
-					if err != nil {
-						log.Printf("Error reading from stdin for client %s: %s", s.RemoteAddr(), err.Error())
-					}
-				}
+		go func() {
+			r := ctxio.NewReader(ctx, s)
+			_, err := io.Copy(f, r) // stdin
+			if err != nil {
+				log.Printf("Error reading from stdin for client %s: %s", s.RemoteAddr(), err.Error())
 			}
-		}(ctx)
-		_, err = io.Copy(s, f) // stdout
+		}()
+		r := ctxio.NewReader(ctx, f)
+		_, err = io.Copy(s, r) // stdout
 		if err != nil {
 			log.Printf("Error writing to stdout for client %s: %s", s.RemoteAddr(), err.Error())
 		}
 		err = cmd.Wait()
-		cancel()
 		if err != nil {
 			log.Printf("Error waiting for command: %s", err.Error())
 			return err

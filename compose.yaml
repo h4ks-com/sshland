@@ -14,8 +14,8 @@ services:
       - SSH_CHAT_PORT=${SSH_CHAT_PORT}
       - HANB_HOST=hanb
       - HANB_PORT=22
-    # volumes:
-    #     - '${DATA_DIR}:/root/.ssh/'
+    volumes:
+        - '${DATA_DIR}:/root/.ssh/'
 
   sshchat:
     build:
