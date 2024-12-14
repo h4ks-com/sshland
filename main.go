@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
-	ctxio "github.com/jbenet/go-context/io"
 	"github.com/joho/godotenv"
 	"github.com/manifoldco/promptui"
 	"golang.org/x/term"
@@ -36,8 +34,6 @@ func runCommand(s ssh.Session, command string, args ...string) error {
 	ptyReq, _, isPty := s.Pty()
 	if isPty {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
 		// cmd.Stderr = s.Stderr()
 		f, err := pty.Start(cmd)
 		if err != nil {
@@ -65,15 +61,16 @@ func runCommand(s ssh.Session, command string, args ...string) error {
 			return err
 		}
 		defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }() // Best effort.
+
+		r := io.NopCloser(s)
+		defer r.Close()
 		go func() {
-			r := ctxio.NewReader(ctx, s)
-			_, err := io.Copy(f, r) // stdin
+			_, err = io.Copy(f, r) // stdin
 			if err != nil {
 				log.Printf("Error reading from stdin for client %s: %s", s.RemoteAddr(), err.Error())
 			}
 		}()
-		r := ctxio.NewReader(ctx, f)
-		_, err = io.Copy(s, r) // stdout
+		_, err = io.Copy(s, f) // stdout
 		if err != nil {
 			log.Printf("Error writing to stdout for client %s: %s", s.RemoteAddr(), err.Error())
 		}
@@ -180,6 +177,12 @@ func main() {
 		}
 	})
 
+	hostKeyFile := getEnv("SSH_HOST_KEY_PATH", "")
 	println("Listening on " + host + ":" + port)
-	log.Fatal(ssh.ListenAndServe(host+":"+port, nil))
+
+	if hostKeyFile == "" {
+		log.Fatal(ssh.ListenAndServe(host+":"+port, nil))
+	} else {
+		log.Fatal(ssh.ListenAndServe(host+":"+port, nil, ssh.HostKeyFile(hostKeyFile)))
+	}
 }
