@@ -4,29 +4,42 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
 	"syscall"
 
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/wish"
+	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
 	"github.com/joho/godotenv"
-	"github.com/manifoldco/promptui"
 	"golang.org/x/term"
 )
+
+type item struct {
+	name string
+	command string
+}
+
+
+type model struct {
+	sess session
+	list list.Model
+	choice string
+	quitting bool
+}
+
+func (i item) FilterValue() string { return i.name }
 
 func getEnv(key string, defaultValue string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
 	}
 	return defaultValue
-}
-func write(s ssh.Session, msg string) {
-	_, ok := io.WriteString(s, msg)
-	if ok != nil {
-		log.Println("Error writing to session: " + ok.Error())
-	}
 }
 
 func runCommand(s ssh.Session, command string, args ...string) error {
@@ -37,7 +50,6 @@ func runCommand(s ssh.Session, command string, args ...string) error {
 		// cmd.Stderr = s.Stderr()
 		f, err := pty.Start(cmd)
 		if err != nil {
-			write(s, "Error starting command: "+err.Error())
 			return err
 		}
 		defer func() { _ = f.Close() }() // Best effort.
@@ -89,13 +101,6 @@ func runCommand(s ssh.Session, command string, args ...string) error {
 	return nil
 }
 
-func sshInto(s ssh.Session, username string, host string, port string) {
-	err := runCommand(s, "ssh", "-o", "StrictHostKeyChecking=no", "-p", port, username+"@"+host)
-	if err != nil {
-		write(s, "Error: "+err.Error()+"\n")
-	}
-}
-
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -110,73 +115,28 @@ func main() {
 	var host = getEnv("SSH_LISTEN_HOST", "0.0.0.0")
 
 	// If there is a argument, it will be used as the command to wrap
-	if len(os.Args) > 1 {
-		ssh.Handle(func(s ssh.Session) {
-			log.Printf("Client connected: %s", s.RemoteAddr())
-			err := runCommand(s, os.Args[1])
-			if err != nil {
-				write(s, "Error: "+err.Error()+"\n")
-			}
-			log.Printf("Client disconnected: %s", s.RemoteAddr())
-		})
-		println("Wrapping command: " + os.Args[1])
-		println("Listening on " + host + ":" + port)
-		log.Fatal(ssh.ListenAndServe(host+":"+port, nil))
-		return
-	}
 
 	var sshchat_port = getEnv("SSH_CHAT_PORT", "")
 	var sshchat_host = getEnv("SSH_CHAT_HOST", "")
 	var hanb_port = getEnv("HANB_PORT", "")
 	var hanb_host = getEnv("HANB_HOST", "")
 
-	ssh.Handle(func(s ssh.Session) {
-		for {
-			// Clear terminal
-			write(s, "\033[H\033[2J")
-			write(s, "Welcome to the SSH server "+s.User()+"!\n")
-			prompt := promptui.Select{
-				Label:  "Select option:",
-				Items:  []string{"Chat", "hanb", "Exit"},
-				Stdin:  s,
-				Stdout: s,
-			}
-			_, result, err := prompt.Run()
+	var username string 
 
-			if err != nil {
-				write(s, "Prompt failed\n"+err.Error())
-				return
-			}
-			write(s, "Selected: "+result+"\n")
-			switch result {
-			case "Chat":
-				if sshchat_port == "" {
-					write(s, "SSH_CHAT_PORT not set\n")
-					return
-				}
-				if sshchat_host == "" {
-					write(s, "SSH_CHAT_HOST not set\n")
-					return
-				}
-				write(s, "Connecting to SSH Chat\n")
-				sshInto(s, s.User(), sshchat_host, sshchat_port)
-			case "hanb":
-				if hanb_port == "" {
-					write(s, "HANB_PORT not set\n")
-					return
-				}
-				if hanb_host == "" {
-					write(s, "HANB_HOST not set\n")
-					return
-				}
-				sshInto(s, s.User(), hanb_host, hanb_port)
-			case "Exit":
-				write(s, "Goodbye!\n")
-				s.Close()
-			}
-		}
-	})
+	items := []list.Item{
+		item{name: "hanb", command: fmt.Sprintf("ssh -o StrictHostKeyChecking=no -p %s %s@%s", hanb_port, username, hanb_host)},
+		item{name: "Chat", command: fmt.Sprint("ssh -o StrictHostKeyChecking=no -p %s %s@%s", sshchat_port, username, sshchat_host)},
+	}
 
+	fmt.Print(items)
+
+	s, err := wish.NewServer(
+		wish.WithAddress(net.JoinHostPort(host, port)),
+		wish.WithMiddleware(
+			bubbletea.Middleware(teaHandler)
+		)
+	)
+	
 	hostKeyFile := getEnv("SSH_HOST_KEY_PATH", "")
 	println("Listening on " + host + ":" + port)
 
@@ -185,4 +145,54 @@ func main() {
 	} else {
 		log.Fatal(ssh.ListenAndServe(host+":"+port, nil, ssh.HostKeyFile(hostKeyFile)))
 	}
+}
+
+func teaHandler(s ssh.Session) (tea.Model, tea.ProgramOption) {
+	renderer := bubbletea.MakeRenderer(s)
+
+	m 
+}
+
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+type commandFinishedMsg struct{ err error }
+
+func execProcess(command string) tea.Cmd {
+	c := exec.Command(command)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return commandFinishedMsg{err}
+	})
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.list.SetWidth(msg.Width)
+		return m, nil
+
+	case tea.KeyMsg:
+		switch keypress := msg.String(); keypress {
+		case "q", "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
+
+		case "enter":
+			i, ok := m.list.SelectedItem().(item)
+			if ok {
+				return m, execProcess(i.command)
+			}
+		}
+	}
+
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+func (m model) View() string {
+	s := "Welcome to the SSH server.\n"
+	s += m.list.View()
+	return s
 }
