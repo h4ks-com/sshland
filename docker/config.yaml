@@ -1,0 +1,20 @@
+apps:
+  - name: "wordle"
+    description: "Wordle word game"
+    host: "wordle"
+    port: 1337
+
+  - name: "chat"
+    description: "SSH group chat"
+    host: "sshchat"
+    port: 2022
+
+  - name: "tobby"
+    description: "IRC client (#dev on h4ks.com)"
+    host: "tobby"
+    port: 22
+
+  - name: "hanb"
+    description: "hanb shell"
+    host: "hanb"
+    port: 22

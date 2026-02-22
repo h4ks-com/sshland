@@ -1,43 +1,76 @@
+networks:
+  mesh:
+    internal: true
+  tobby-egress: {}
+
+volumes:
+  sshchat_data:
+  hanb_data:
+  tobby_data:
+
 services:
-  server:
+  entry-menu:
     build:
-      context: ./
-      dockerfile: ./docker/Dockerfile
-    restart: always
-    stdin_open: true
-    tty: true
-    env_file: .env
+      context: .
+      dockerfile: docker/Dockerfile
     ports:
-      - "${SSH_LISTEN_PORT}:${SSH_LISTEN_PORT}"
-    environment:
-      - SSH_CHAT_HOST=${SSH_CHAT_HOST}
-      - SSH_CHAT_PORT=${SSH_CHAT_PORT}
-      - HANB_HOST=hanb
-      - HANB_PORT=22
+      - "${SSH_PORT:-6922}:22"
     volumes:
-        - '${DATA_DIR}:/root/.ssh/'
+      # Bind-mount the whole data directory. entry-menu auto-generates host_key
+      # inside it on first start. Place authorized_keys here to enable named users.
+      - ${DATA_DIR:-./data}:/data
+      - ./docker/config.yaml:/etc/sshland/config.yaml:ro
+    environment:
+      SSH_HOST_KEY_PATH: /data/host_key
+      AUTHORIZED_KEYS_PATH: /data/authorized_keys
+      CONFIG_PATH: /etc/sshland/config.yaml
+      SSH_LISTEN_ADDR: "0.0.0.0:22"
+    networks:
+      - default
+      - mesh
+    restart: always
+
+  wordle:
+    build:
+      context: .
+      dockerfile: docker/wordle/Dockerfile
+    networks:
+      - mesh
+    restart: always
 
   sshchat:
     build:
-      context: ./
-      dockerfile: ./docker/sshchat/Dockerfile
-    restart: always
-    stdin_open: true
-    tty: true
-    ports:
-      - "${SSH_CHAT_PORT}:2022"
+      context: .
+      dockerfile: docker/sshchat/Dockerfile
     volumes:
-        - '${DATA_DIR}:/root/.ssh/'
+      - sshchat_data:/data
+    networks:
+      - mesh
+    restart: always
 
   hanb:
     build:
-      context: ./
-      dockerfile: ./docker/hanb/Dockerfile
-    restart: always
-    stdin_open: true
-    tty: true
+      context: .
+      dockerfile: docker/hanb/Dockerfile
     environment:
-      - SSH_LISTEN_PORT=22
-      - SSH_LISTEN_HOST=0.0.0.0
+      SSH_HOST_KEY_PATH: /data/host_key
+      SSH_LISTEN_ADDR: "0.0.0.0:22"
     volumes:
-        - '${DATA_DIR}:/root/.ssh/'
+      - hanb_data:/data
+    networks:
+      - mesh
+    restart: always
+
+  tobby:
+    build:
+      context: .
+      dockerfile: docker/tobby/Dockerfile
+    environment:
+      SSH_HOST_KEY_PATH: /data/host_key
+      SSH_LISTEN_ADDR: "0.0.0.0:22"
+    volumes:
+      - tobby_data:/data
+    networks:
+      - mesh
+      - tobby-egress
+    restart: always

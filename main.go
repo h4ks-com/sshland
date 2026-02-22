@@ -1,188 +1,196 @@
 package main
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
-	"github.com/creack/pty"
-	"github.com/gliderlabs/ssh"
-	"github.com/joho/godotenv"
-	"github.com/manifoldco/promptui"
-	"golang.org/x/term"
+	tea "github.com/charmbracelet/bubbletea"
+	cssh "github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/wish"
+	"github.com/charmbracelet/wish/activeterm"
+	bm "github.com/charmbracelet/wish/bubbletea"
+	"github.com/charmbracelet/wish/logging"
+	"github.com/charmbracelet/wish/ratelimiter"
+	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/time/rate"
 )
 
-func getEnv(key string, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
+func getEnv(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
 	}
-	return defaultValue
-}
-func write(s ssh.Session, msg string) {
-	_, ok := io.WriteString(s, msg)
-	if ok != nil {
-		log.Println("Error writing to session: " + ok.Error())
-	}
+	return def
 }
 
-func runCommand(s ssh.Session, command string, args ...string) error {
-	cmd := exec.Command(command, args...)
-	ptyReq, _, isPty := s.Pty()
-	if isPty {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
-		// cmd.Stderr = s.Stderr()
-		f, err := pty.Start(cmd)
-		if err != nil {
-			write(s, "Error starting command: "+err.Error())
-			return err
-		}
-		defer func() { _ = f.Close() }() // Best effort.
-		// Handle pty size.
-		ch := make(chan os.Signal, 1)
-		signal.Notify(ch, syscall.SIGWINCH)
-		go func() {
-			for range ch {
-				if err := pty.InheritSize(os.Stdin, f); err != nil {
-					log.Printf("error resizing pty: %s", err)
-				}
-			}
-		}()
-		ch <- syscall.SIGWINCH                        // Initial resize.
-		defer func() { signal.Stop(ch); close(ch) }() // Cleanup signals when done.
-
-		// Set stdin in raw mode.
-		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-		if err != nil {
-			log.Printf("Error making raw: %s", err.Error())
-			return err
-		}
-		defer func() { _ = term.Restore(int(os.Stdin.Fd()), oldState) }() // Best effort.
-
-		r := io.NopCloser(s)
-		defer r.Close()
-		go func() {
-			_, err = io.Copy(f, r) // stdin
-			if err != nil {
-				log.Printf("Error reading from stdin for client %s: %s", s.RemoteAddr(), err.Error())
-			}
-		}()
-		_, err = io.Copy(s, f) // stdout
-		if err != nil {
-			log.Printf("Error writing to stdout for client %s: %s", s.RemoteAddr(), err.Error())
-		}
-		err = cmd.Wait()
-		if err != nil {
-			log.Printf("Error waiting for command: %s", err.Error())
-			return err
-		}
-	} else {
-		_, err := io.WriteString(s, "No PTY requested.\n")
-		if err != nil {
-			log.Printf("Error writing to session: %s", err.Error())
-			return err
-		}
-	}
-	return nil
-}
-
-func sshInto(s ssh.Session, username string, host string, port string) {
-	err := runCommand(s, "ssh", "-o", "StrictHostKeyChecking=no", "-p", port, username+"@"+host)
+// resolveUsername returns the comment field from authorized_keys if the
+// presented key matches, otherwise returns guest-<shortSessionID>.
+func resolveUsername(ctx cssh.Context, key cssh.PublicKey, authKeysPath string) string {
+	data, err := os.ReadFile(authKeysPath)
 	if err != nil {
-		write(s, "Error: "+err.Error()+"\n")
+		return guestName(ctx)
+	}
+	presented := key.Marshal()
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parsed, comment, _, _, err := gossh.ParseAuthorizedKey([]byte(line))
+		if err != nil {
+			continue
+		}
+		if string(parsed.Marshal()) == string(presented) && comment != "" {
+			return comment
+		}
+	}
+	return guestName(ctx)
+}
+
+func guestName(ctx cssh.Context) string {
+	sid := ctx.SessionID()
+	if len(sid) > 8 {
+		sid = sid[:8]
+	}
+	return "guest-" + sid
+}
+
+// hostKeyOption loads a host key from path if it's a regular file.
+// If the file is missing or is a directory (Docker bind-mount artifact),
+// it generates a fresh ED25519 key and tries to persist it for future restarts.
+func hostKeyOption(path string) cssh.Option {
+	info, err := os.Stat(path)
+	if err == nil && info.Mode().IsRegular() {
+		return wish.WithHostKeyPath(path)
+	}
+	// Generate a transient key and try to persist it.
+	_, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		log.Fatalf("generating host key: %v", err)
+	}
+	block, err := gossh.MarshalPrivateKey(privKey, "")
+	if err != nil {
+		log.Fatalf("marshalling host key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(block)
+	// Best-effort save: remove the directory Docker may have created, then write the file.
+	_ = os.RemoveAll(path)
+	_ = os.MkdirAll(filepath.Dir(path), 0700)
+	if err := os.WriteFile(path, pemBytes, 0600); err != nil {
+		log.Printf("could not persist host key to %s: %v (will regenerate on restart)", path, err)
+	}
+	return wish.WithHostKeyPEM(pemBytes)
+}
+
+type usernameKey struct{}
+
+func makePublicKeyHandler(authKeysPath string) cssh.Option {
+	return wish.WithPublicKeyAuth(func(ctx cssh.Context, key cssh.PublicKey) bool {
+		username := resolveUsername(ctx, key, authKeysPath)
+		ctx.SetValue(usernameKey{}, username)
+		// charmbracelet/ssh resets Permissions before calling this handler, leaving
+		// Extensions as a nil map. The library writes to Extensions immediately after
+		// we return, so we must initialize it here to prevent a nil-map panic.
+		if ctx.Permissions().Extensions == nil {
+			ctx.Permissions().Extensions = make(map[string]string)
+		}
+		return true
+	})
+}
+
+func makeMenuHandler(cfg Config) func(sess cssh.Session) (tea.Model, []tea.ProgramOption) {
+	return func(sess cssh.Session) (tea.Model, []tea.ProgramOption) {
+		username, ok := sess.Context().Value(usernameKey{}).(string)
+		if !ok || username == "" {
+			sid := sess.Context().SessionID()
+			if len(sid) > 8 {
+				sid = sid[:8]
+			}
+			username = "guest-" + sid
+		}
+		renderer := bm.MakeRenderer(sess)
+		m := newMenuModel(cfg.Apps, username, sess, renderer)
+		return m, []tea.ProgramOption{tea.WithAltScreen()}
+	}
+}
+
+func makeAppMiddleware() wish.Middleware {
+	return func(next cssh.Handler) cssh.Handler {
+		return func(sess cssh.Session) {
+			app, ok := sess.Context().Value(selectedAppKey{}).(AppConfig)
+			if !ok {
+				// user quit without selecting
+				next(sess)
+				return
+			}
+			username, _ := sess.Context().Value(usernameKey{}).(string)
+			if username == "" {
+				username = sess.User()
+			}
+			log.Printf("proxying %s to %s as %s", sess.RemoteAddr(), app.Addr(), username)
+			if err := Connect(sess, app, username); err != nil {
+				_, _ = fmt.Fprintf(sess.Stderr(), "connection error: %v\n", err)
+			}
+			next(sess)
+		}
 	}
 }
 
 func main() {
-	err := godotenv.Load()
+	hostKeyPath := getEnv("SSH_HOST_KEY_PATH", "/data/host_key")
+	authKeysPath := getEnv("AUTHORIZED_KEYS_PATH", "/data/authorized_keys")
+	configPath := getEnv("CONFIG_PATH", "/etc/sshland/config.yaml")
+	listenAddr := getEnv("SSH_LISTEN_ADDR", "0.0.0.0:22")
+
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
-		if err.Error() == "open .env: no such file or directory" {
-			log.Println("No .env file found. Using default settings and environment variables.")
-		} else {
-			log.Fatal("Error loading .env file")
-		}
+		log.Fatalf("loading config: %v", err)
 	}
 
-	var port = getEnv("SSH_LISTEN_PORT", "22")
-	var host = getEnv("SSH_LISTEN_HOST", "0.0.0.0")
-
-	// If there is a argument, it will be used as the command to wrap
-	if len(os.Args) > 1 {
-		ssh.Handle(func(s ssh.Session) {
-			log.Printf("Client connected: %s", s.RemoteAddr())
-			err := runCommand(s, os.Args[1])
-			if err != nil {
-				write(s, "Error: "+err.Error()+"\n")
-			}
-			log.Printf("Client disconnected: %s", s.RemoteAddr())
-		})
-		println("Wrapping command: " + os.Args[1])
-		println("Listening on " + host + ":" + port)
-		log.Fatal(ssh.ListenAndServe(host+":"+port, nil))
-		return
+	srv, err := wish.NewServer(
+		wish.WithAddress(listenAddr),
+		hostKeyOption(hostKeyPath),
+		makePublicKeyHandler(authKeysPath),
+		wish.WithPasswordAuth(func(_ cssh.Context, _ string) bool {
+			return false // no password auth
+		}),
+		wish.WithIdleTimeout(10*time.Minute),
+		wish.WithMiddleware(
+			makeAppMiddleware(),
+			bm.Middleware(makeMenuHandler(cfg)),
+			activeterm.Middleware(),
+			logging.Middleware(),
+			ratelimiter.Middleware(ratelimiter.NewRateLimiter(rate.Every(time.Second), 10, 1000)),
+		),
+	)
+	if err != nil {
+		log.Fatalf("creating server: %v", err)
 	}
 
-	var sshchat_port = getEnv("SSH_CHAT_PORT", "")
-	var sshchat_host = getEnv("SSH_CHAT_HOST", "")
-	var hanb_port = getEnv("HANB_PORT", "")
-	var hanb_host = getEnv("HANB_HOST", "")
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
 
-	ssh.Handle(func(s ssh.Session) {
-		for {
-			// Clear terminal
-			write(s, "\033[H\033[2J")
-			write(s, "Welcome to the SSH server "+s.User()+"!\n")
-			prompt := promptui.Select{
-				Label:  "Select option:",
-				Items:  []string{"Chat", "hanb", "Exit"},
-				Stdin:  s,
-				Stdout: s,
-			}
-			_, result, err := prompt.Run()
-
-			if err != nil {
-				write(s, "Prompt failed\n"+err.Error())
-				return
-			}
-			write(s, "Selected: "+result+"\n")
-			switch result {
-			case "Chat":
-				if sshchat_port == "" {
-					write(s, "SSH_CHAT_PORT not set\n")
-					return
-				}
-				if sshchat_host == "" {
-					write(s, "SSH_CHAT_HOST not set\n")
-					return
-				}
-				write(s, "Connecting to SSH Chat\n")
-				sshInto(s, s.User(), sshchat_host, sshchat_port)
-			case "hanb":
-				if hanb_port == "" {
-					write(s, "HANB_PORT not set\n")
-					return
-				}
-				if hanb_host == "" {
-					write(s, "HANB_HOST not set\n")
-					return
-				}
-				sshInto(s, s.User(), hanb_host, hanb_port)
-			case "Exit":
-				write(s, "Goodbye!\n")
-				s.Close()
-			}
+	log.Printf("starting sshland on %s", listenAddr)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Printf("server stopped: %v", err)
 		}
-	})
+	}()
 
-	hostKeyFile := getEnv("SSH_HOST_KEY_PATH", "")
-	println("Listening on " + host + ":" + port)
-
-	if hostKeyFile == "" {
-		log.Fatal(ssh.ListenAndServe(host+":"+port, nil))
-	} else {
-		log.Fatal(ssh.ListenAndServe(host+":"+port, nil, ssh.HostKeyFile(hostKeyFile)))
+	<-done
+	log.Println("shutting down")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("shutdown error: %v", err)
 	}
 }
