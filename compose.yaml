@@ -7,6 +7,7 @@ volumes:
   sshchat_data:
   hanb_data:
   tobby_data:
+  proxy_key: {}
 
 services:
   entry-menu:
@@ -14,21 +15,28 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     ports:
-      - "${SSH_PORT:-6922}:22"
+      - "${SSH_PORT:-6922}:2222"
     volumes:
-      # Bind-mount the whole data directory. entry-menu auto-generates host_key
-      # inside it on first start. Place authorized_keys here to enable named users.
       - ${DATA_DIR:-./data}:/data
       - ./docker/config.yaml:/etc/sshland/config.yaml:ro
+      - proxy_key:/proxy_key
     environment:
       SSH_HOST_KEY_PATH: /data/host_key
-      AUTHORIZED_KEYS_PATH: /data/authorized_keys
+      SSH_LISTEN_ADDR: "0.0.0.0:2222"
       CONFIG_PATH: /etc/sshland/config.yaml
-      SSH_LISTEN_ADDR: "0.0.0.0:22"
+      PROXY_KEY_PATH: /proxy_key/key
     networks:
       - default
       - mesh
     restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
+          pids: 200
 
   wordle:
     build:
@@ -37,6 +45,14 @@ services:
     networks:
       - mesh
     restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
+          pids: 50
 
   sshchat:
     build:
@@ -47,30 +63,58 @@ services:
     networks:
       - mesh
     restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
+          pids: 100
 
   hanb:
     build:
       context: .
       dockerfile: docker/hanb/Dockerfile
     environment:
-      SSH_HOST_KEY_PATH: /data/host_key
-      SSH_LISTEN_ADDR: "0.0.0.0:22"
+      SSH_HOST_KEY_PATH: /tmp/sshland/host_key
+      SSH_LISTEN_ADDR: "0.0.0.0:2222"
+      PROXY_KEY_PATH: /proxy_key/key
     volumes:
       - hanb_data:/data
+      - proxy_key:/proxy_key:ro
     networks:
       - mesh
     restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
+          pids: 100
 
   tobby:
     build:
       context: .
       dockerfile: docker/tobby/Dockerfile
     environment:
-      SSH_HOST_KEY_PATH: /data/host_key
-      SSH_LISTEN_ADDR: "0.0.0.0:22"
+      SSH_HOST_KEY_PATH: /tmp/sshland/host_key
+      SSH_LISTEN_ADDR: "0.0.0.0:2222"
+      PROXY_KEY_PATH: /proxy_key/key
     volumes:
       - tobby_data:/data
+      - proxy_key:/proxy_key:ro
     networks:
       - mesh
       - tobby-egress
     restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
+          pids: 100

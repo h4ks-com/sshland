@@ -12,6 +12,15 @@ RUN go build -o /build/wrapper-bin ./wrapper/
 
 FROM --platform=linux/amd64 oven/bun:alpine
 
+# Install bun packages to /opt/bun (world-readable) so the sshland user can
+# access them at runtime. BUN_INSTALL must be set before any bun install call.
+ENV BUN_INSTALL=/opt/bun
+
+# Create non-root user and install tobby globally into /opt/bun.
+RUN addgroup -S sshland && adduser -S -G sshland sshland && \
+    mkdir -p /home/sshland /data /proxy_key && \
+    chown sshland:sshland /home/sshland /data /proxy_key
+
 COPY --from=go-builder /build/wrapper-bin /usr/local/bin/wrapper
 
 # tobby's dist/index.js dynamically loads libopentui.so from @opentui/core-linux-x64.
@@ -21,15 +30,17 @@ COPY --from=go-builder /build/wrapper-bin /usr/local/bin/wrapper
 # The published package also omits bin/tobby.js (only dist/index.js exists), leaving
 # bun's binary symlink dangling — we replace it with a working shell shim.
 RUN bun install -g @mattfillipe/tobby && \
-    cd /root/.bun/install/global && \
+    cd /opt/bun/install/global && \
     bun add @opentui/core@0.1.75 @opentui/core-linux-x64@0.1.75 && \
-    printf '#!/bin/sh\nexec bun /root/.bun/install/global/node_modules/@mattfillipe/tobby/dist/index.js "$@"\n' \
+    printf '#!/bin/sh\nexec bun /opt/bun/install/global/node_modules/@mattfillipe/tobby/dist/index.js "$@"\n' \
         > /usr/local/bin/tobby && \
     chmod +x /usr/local/bin/tobby
 
-RUN mkdir -p /data
+ENV HOME=/home/sshland
 
-EXPOSE 22
+USER sshland
+
+EXPOSE 2222
 
 ENTRYPOINT ["/usr/local/bin/wrapper", "/usr/local/bin/tobby", \
     "--db", "/data/{username}.sqlite", \

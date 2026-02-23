@@ -3,15 +3,20 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/pem"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"sync"
 
 	cssh "github.com/charmbracelet/ssh"
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// proxyKey is a throwaway ED25519 key used for all internal proxy connections.
-// Generated once per process; all app containers on the mesh accept any key.
+// proxyKey is an ED25519 keypair used exclusively for entry-menu → wrapper
+// internal connections. It is persisted to PROXY_KEY_PATH so wrapper containers
+// can verify the key across restarts without sharing the private key.
 var (
 	proxyOnce   sync.Once
 	proxySigner gossh.Signer
@@ -19,6 +24,21 @@ var (
 
 func getProxySigner() gossh.Signer {
 	proxyOnce.Do(func() {
+		path := getEnv("PROXY_KEY_PATH", "/proxy_key/key")
+
+		// Try to load an existing persisted key first.
+		if data, err := os.ReadFile(path); err == nil {
+			raw, err := gossh.ParseRawPrivateKey(data)
+			if err == nil {
+				if s, err := gossh.NewSignerFromKey(raw); err == nil {
+					proxySigner = s
+					return
+				}
+			}
+			log.Printf("proxy: could not parse existing key at %s, regenerating: %v", path, err)
+		}
+
+		// Generate a fresh key and persist it.
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			panic("generating proxy key: " + err.Error())
@@ -26,6 +46,16 @@ func getProxySigner() gossh.Signer {
 		proxySigner, err = gossh.NewSignerFromKey(priv)
 		if err != nil {
 			panic("creating proxy signer: " + err.Error())
+		}
+
+		block, err := gossh.MarshalPrivateKey(priv, "")
+		if err != nil {
+			log.Printf("proxy: marshalling proxy key: %v", err)
+			return
+		}
+		_ = os.MkdirAll(filepath.Dir(path), 0700)
+		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
+			log.Printf("proxy: could not persist proxy key to %s: %v", path, err)
 		}
 	})
 	return proxySigner
@@ -41,7 +71,6 @@ func Connect(sess cssh.Session, app AppConfig, username string) error {
 		User: username,
 		Auth: []gossh.AuthMethod{
 			gossh.PublicKeys(getProxySigner()),
-			gossh.Password("internal"),
 		},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec // internal mesh only
 	}

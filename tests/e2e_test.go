@@ -128,8 +128,10 @@ func dialWait(addr string, timeout time.Duration) bool {
 
 func sshClient(t *testing.T) *gossh.Client {
 	t.Helper()
+	// "guest" is a blocked prefix → always an ephemeral guest session regardless
+	// of key, so the test key never conflicts with a registered nick.
 	cfg := &gossh.ClientConfig{
-		User:            "testuser",
+		User:            "guest",
 		Auth:            []gossh.AuthMethod{gossh.PublicKeys(testSigner)},
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(), //nolint:gosec // test only
 		Timeout:         10 * time.Second,
@@ -231,7 +233,7 @@ func ptySession(t *testing.T, cl *gossh.Client) (io.WriteCloser, *outBuf, *gossh
 }
 
 // menuOrder matches the order in docker/config.yaml.
-var menuOrder = []string{"wordle", "chat", "tobby", "hanb"}
+var menuOrder = []string{"chat", "tobby", "hanb", "wordle"}
 
 // selectApp waits for the menu and navigates to the named app.
 func selectApp(t *testing.T, stdin io.Writer, out *outBuf, name string) {

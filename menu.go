@@ -15,6 +15,8 @@ type menuModel struct {
 	apps     []AppConfig
 	cursor   int
 	username string
+	isNew    bool
+	isGuest  bool
 	sess     cssh.Session
 	renderer *lipgloss.Renderer
 }
@@ -41,10 +43,12 @@ var keys = keyMap{
 	),
 }
 
-func newMenuModel(apps []AppConfig, username string, sess cssh.Session, renderer *lipgloss.Renderer) menuModel {
+func newMenuModel(apps []AppConfig, username string, isNew, isGuest bool, sess cssh.Session, renderer *lipgloss.Renderer) menuModel {
 	return menuModel{
 		apps:     apps,
 		username: username,
+		isNew:    isNew,
+		isGuest:  isGuest,
 		sess:     sess,
 		renderer: renderer,
 	}
@@ -84,12 +88,33 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m menuModel) View() string {
 	r := m.renderer
 
+	welcomeStyle := r.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("213")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 2).
+		MarginBottom(1)
+
+	hintStyle := r.NewStyle().
+		Foreground(lipgloss.Color("214")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 2).
+		MarginBottom(1)
+
+	hintCmdStyle := r.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("222")).
+		Background(lipgloss.Color("236"))
+
 	titleStyle := r.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("205")).
 		MarginBottom(1)
 
 	userStyle := r.NewStyle().
+		Foreground(lipgloss.Color("241"))
+
+	subtitleStyle := r.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginBottom(1)
 
@@ -107,8 +132,20 @@ func (m menuModel) View() string {
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1)
 
-	out := titleStyle.Render("sshland") + "\n"
+	var out string
+	if m.isGuest {
+		cmd := hintCmdStyle.Render("ssh-copy-id yournick@h4ks.com")
+		out += hintStyle.Render("Want to keep a nick? Run: "+cmd) + "\n"
+	} else {
+		out += welcomeStyle.Render(fmt.Sprintf("Welcome to h4ks.com, %s!", m.username)) + "\n"
+	}
+
+	out += titleStyle.Render("sshland") + "\n"
 	out += userStyle.Render(fmt.Sprintf("logged in as %s", m.username)) + "\n"
+
+	if m.isNew {
+		out += subtitleStyle.Render("· nick registered!") + "\n"
+	}
 
 	for i, app := range m.apps {
 		cursor := "  "

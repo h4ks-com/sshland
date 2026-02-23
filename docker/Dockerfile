@@ -10,10 +10,14 @@ RUN go build -o sshland .
 
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates && \
+    addgroup -S sshland && adduser -S -G sshland sshland && \
+    mkdir -p /proxy_key && chown sshland:sshland /proxy_key
 
 COPY --from=builder /build/sshland /usr/local/bin/sshland
 
-EXPOSE 22
+USER sshland
+
+EXPOSE 2222
 
 ENTRYPOINT ["/usr/local/bin/sshland"]

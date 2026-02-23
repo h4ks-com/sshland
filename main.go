@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -17,7 +18,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	cssh "github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
-	"github.com/charmbracelet/wish/activeterm"
 	bm "github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
 	"github.com/charmbracelet/wish/ratelimiter"
@@ -32,28 +32,55 @@ func getEnv(key, def string) string {
 	return def
 }
 
-// resolveUsername returns the comment field from authorized_keys if the
-// presented key matches, otherwise returns guest-<shortSessionID>.
-func resolveUsername(ctx cssh.Context, key cssh.PublicKey, authKeysPath string) string {
-	data, err := os.ReadFile(authKeysPath)
+var (
+	validNickRe     = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]{1,19}$`)
+	blockedPrefixes = []string{"guest", "root", "admin", "sshland"}
+)
+
+func isValidNick(nick string) bool {
+	if !validNickRe.MatchString(nick) {
+		return false
+	}
+	lower := strings.ToLower(nick)
+	for _, prefix := range blockedPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+// loadNickKey reads the stored public key for nick. Returns nil, nil if the
+// nick file does not exist yet.
+func loadNickKey(nicksDir, nick string) (gossh.PublicKey, error) {
+	data, err := os.ReadFile(filepath.Join(nicksDir, nick))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
-		return guestName(ctx)
+		return nil, err
 	}
-	presented := key.Marshal()
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parsed, comment, _, _, err := gossh.ParseAuthorizedKey([]byte(line))
-		if err != nil {
-			continue
-		}
-		if string(parsed.Marshal()) == string(presented) && comment != "" {
-			return comment
-		}
+	key, _, _, _, err := gossh.ParseAuthorizedKey(data)
+	if err != nil {
+		return nil, err
 	}
-	return guestName(ctx)
+	return key, nil
+}
+
+// saveNickKey atomically creates the nick file and writes the authorized-key
+// line. Returns an error (including os.ErrExist) if the file already exists.
+func saveNickKey(nicksDir, nick string, key gossh.PublicKey) error {
+	path := filepath.Join(nicksDir, nick)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.Write(gossh.MarshalAuthorizedKey(key))
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 func guestName(ctx cssh.Context) string {
@@ -92,33 +119,94 @@ func hostKeyOption(path string) cssh.Option {
 }
 
 type usernameKey struct{}
+type isNewNickKey struct{}
+type isGuestKey struct{}
 
-func makePublicKeyHandler(authKeysPath string) cssh.Option {
+func makePublicKeyHandler(nicksDir string) cssh.Option {
 	return wish.WithPublicKeyAuth(func(ctx cssh.Context, key cssh.PublicKey) bool {
-		username := resolveUsername(ctx, key, authKeysPath)
-		ctx.SetValue(usernameKey{}, username)
 		// charmbracelet/ssh resets Permissions before calling this handler, leaving
 		// Extensions as a nil map. The library writes to Extensions immediately after
 		// we return, so we must initialize it here to prevent a nil-map panic.
 		if ctx.Permissions().Extensions == nil {
 			ctx.Permissions().Extensions = make(map[string]string)
 		}
+
+		nick := ctx.User()
+
+		// Invalid or blocked nick → ephemeral guest session.
+		if !isValidNick(nick) {
+			ctx.SetValue(usernameKey{}, guestName(ctx))
+			ctx.SetValue(isGuestKey{}, true)
+			return true
+		}
+
+		stored, err := loadNickKey(nicksDir, nick)
+		if err != nil {
+			log.Printf("loadNickKey %s: %v", nick, err)
+			return false
+		}
+
+		if stored == nil {
+			// Nick not yet registered — claim it atomically.
+			if err := saveNickKey(nicksDir, nick, key); err != nil {
+				if os.IsExist(err) {
+					// Lost a registration race; the nick was just claimed by someone else.
+					return false
+				}
+				log.Printf("saveNickKey %s: %v", nick, err)
+				return false
+			}
+			ctx.SetValue(usernameKey{}, nick)
+			ctx.SetValue(isNewNickKey{}, true)
+			return true
+		}
+
+		// Nick is registered — key must match.
+		if string(stored.Marshal()) != string(key.Marshal()) {
+			return false
+		}
+		ctx.SetValue(usernameKey{}, nick)
 		return true
 	})
+}
+
+// makeTerminalMiddleware replaces activeterm.Middleware(). Sessions with a PTY
+// proceed normally to the bubbletea menu. Non-PTY sessions (e.g. ssh-copy-id)
+// receive a one-line status message and exit cleanly.
+func makeTerminalMiddleware() wish.Middleware {
+	return func(next cssh.Handler) cssh.Handler {
+		return func(sess cssh.Session) {
+			_, _, isPty := sess.Pty()
+			if isPty {
+				next(sess)
+				return
+			}
+			username, _ := sess.Context().Value(usernameKey{}).(string)
+			isNew, _ := sess.Context().Value(isNewNickKey{}).(bool)
+			isGuest, _ := sess.Context().Value(isGuestKey{}).(bool)
+			switch {
+			case isGuest:
+				_, _ = fmt.Fprintf(sess, "sshland: connect as ssh yournick@host to register a nick\n")
+			case isNew:
+				_, _ = fmt.Fprintf(sess, "sshland: nick %q registered to your key\n", username)
+			default:
+				_, _ = fmt.Fprintf(sess, "sshland: welcome back, %s\n", username)
+			}
+			_ = sess.Exit(0)
+		}
+	}
 }
 
 func makeMenuHandler(cfg Config) func(sess cssh.Session) (tea.Model, []tea.ProgramOption) {
 	return func(sess cssh.Session) (tea.Model, []tea.ProgramOption) {
 		username, ok := sess.Context().Value(usernameKey{}).(string)
 		if !ok || username == "" {
-			sid := sess.Context().SessionID()
-			if len(sid) > 8 {
-				sid = sid[:8]
-			}
-			username = "guest-" + sid
+			username = guestName(sess.Context())
 		}
+		isNew, _ := sess.Context().Value(isNewNickKey{}).(bool)
+		isGuest, _ := sess.Context().Value(isGuestKey{}).(bool)
 		renderer := bm.MakeRenderer(sess)
-		m := newMenuModel(cfg.Apps, username, sess, renderer)
+		m := newMenuModel(cfg.Apps, username, isNew, isGuest, sess, renderer)
 		return m, []tea.ProgramOption{tea.WithAltScreen()}
 	}
 }
@@ -147,9 +235,13 @@ func makeAppMiddleware() wish.Middleware {
 
 func main() {
 	hostKeyPath := getEnv("SSH_HOST_KEY_PATH", "/data/host_key")
-	authKeysPath := getEnv("AUTHORIZED_KEYS_PATH", "/data/authorized_keys")
+	nicksDir := getEnv("NICKS_DIR", "/data/nicks")
 	configPath := getEnv("CONFIG_PATH", "/etc/sshland/config.yaml")
 	listenAddr := getEnv("SSH_LISTEN_ADDR", "0.0.0.0:22")
+
+	if err := os.MkdirAll(nicksDir, 0700); err != nil {
+		log.Fatalf("creating nicks dir %s: %v", nicksDir, err)
+	}
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -159,7 +251,7 @@ func main() {
 	srv, err := wish.NewServer(
 		wish.WithAddress(listenAddr),
 		hostKeyOption(hostKeyPath),
-		makePublicKeyHandler(authKeysPath),
+		makePublicKeyHandler(nicksDir),
 		wish.WithPasswordAuth(func(_ cssh.Context, _ string) bool {
 			return false // no password auth
 		}),
@@ -167,7 +259,7 @@ func main() {
 		wish.WithMiddleware(
 			makeAppMiddleware(),
 			bm.Middleware(makeMenuHandler(cfg)),
-			activeterm.Middleware(),
+			makeTerminalMiddleware(),
 			logging.Middleware(),
 			ratelimiter.Middleware(ratelimiter.NewRateLimiter(rate.Every(time.Second), 10, 1000)),
 		),

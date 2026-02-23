@@ -6,15 +6,20 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	cssh "github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/logging"
+	"github.com/charmbracelet/wish/ratelimiter"
 	"github.com/creack/pty"
+	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/time/rate"
 )
 
 func getEnv(key, def string) string {
@@ -22,6 +27,29 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// safeUsernameRe matches usernames that are safe to substitute into file paths.
+// This covers both registered nicks and entry-menu's guest-XXXXXXXX names.
+var safeUsernameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// loadProxyPublicKey reads the proxy private key from path and returns its
+// public key. Called on every auth attempt so key rotations are picked up
+// automatically without restarting the wrapper.
+func loadProxyPublicKey(path string) (gossh.PublicKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := gossh.ParseRawPrivateKey(data)
+	if err != nil {
+		return nil, err
+	}
+	signer, err := gossh.NewSignerFromKey(raw)
+	if err != nil {
+		return nil, err
+	}
+	return signer.PublicKey(), nil
 }
 
 func handleSession(command string, args []string) wish.Middleware {
@@ -95,24 +123,36 @@ func main() {
 	cmdArgs := os.Args[2:]
 
 	hostKeyPath := getEnv("SSH_HOST_KEY_PATH", "/data/host_key")
-	listenAddr := getEnv("SSH_LISTEN_ADDR", "0.0.0.0:22")
+	listenAddr := getEnv("SSH_LISTEN_ADDR", "0.0.0.0:2222")
+	proxyKeyPath := getEnv("PROXY_KEY_PATH", "/proxy_key/key")
 
 	srv, err := wish.NewServer(
 		wish.WithAddress(listenAddr),
 		wish.WithHostKeyPath(hostKeyPath),
-		wish.WithPublicKeyAuth(func(ctx cssh.Context, _ cssh.PublicKey) bool {
+		wish.WithPublicKeyAuth(func(ctx cssh.Context, presented cssh.PublicKey) bool {
 			if ctx.Permissions().Extensions == nil {
 				ctx.Permissions().Extensions = make(map[string]string)
 			}
-			return true
+			// Reject usernames that are unsafe for {username} path substitution.
+			// Defense-in-depth: entry-menu only ever sends valid nicks or
+			// guest-XXXXXXXX names, both of which match this pattern.
+			if !safeUsernameRe.MatchString(ctx.User()) {
+				return false
+			}
+			// Only accept connections from the entry-menu's proxy key.
+			proxyPub, err := loadProxyPublicKey(proxyKeyPath)
+			if err != nil {
+				log.Printf("wrapper: loading proxy key from %s: %v", proxyKeyPath, err)
+				return false
+			}
+			return string(proxyPub.Marshal()) == string(presented.Marshal())
 		}),
-		wish.WithPasswordAuth(func(_ cssh.Context, _ string) bool {
-			return true
-		}),
+		wish.WithIdleTimeout(10*time.Minute),
 		wish.WithMiddleware(
 			handleSession(command, cmdArgs),
 			activeterm.Middleware(),
 			logging.Middleware(),
+			ratelimiter.Middleware(ratelimiter.NewRateLimiter(rate.Every(time.Second), 10, 1000)),
 		),
 	)
 	if err != nil {
