@@ -16,6 +16,7 @@ services:
       dockerfile: docker/Dockerfile
     ports:
       - "${SSH_PORT:-6922}:2222"
+      - "${HTTP_PORT:-8080}:8080"
     volumes:
       - ${DATA_DIR:-./data}:/data
       - ./docker/config.yaml:/etc/sshland/config.yaml:ro
@@ -25,6 +26,12 @@ services:
       SSH_LISTEN_ADDR: "0.0.0.0:2222"
       CONFIG_PATH: /etc/sshland/config.yaml
       PROXY_KEY_PATH: /proxy_key/key
+      LOGTO_ENDPOINT: "${LOGTO_ENDPOINT:-}"
+      LOGTO_APP_ID: "${LOGTO_APP_ID:-}"
+      LOGTO_APP_SECRET: "${LOGTO_APP_SECRET:-}"
+      LOGTO_REDIRECT_URI: "${LOGTO_REDIRECT_URI:-}"
+      HTTP_LISTEN_ADDR: "${HTTP_LISTEN_ADDR:-0.0.0.0:8080}"
+      IDENTITIES_DIR: "/data/identities"
     networks:
       - default
       - mesh

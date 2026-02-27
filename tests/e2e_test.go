@@ -161,6 +161,9 @@ func (b *outBuf) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// decrqmRe matches DECRQM mode-status queries: \x1b[?Ps$p
+var decrqmRe = regexp.MustCompile(`\x1b\[\?([0-9]+)\$p`)
+
 // respondToQueries detects terminal capability query sequences and writes the
 // minimal correct response. Without this, charmbracelet/wish's queryTerminal
 // blocks indefinitely because the SSH stdin pipe has no Fd() to interrupt.
@@ -175,6 +178,14 @@ func (b *outBuf) respondToQueries(raw string) {
 	// OSC 11 — server asks "what is your background color?"
 	if strings.Contains(raw, "\x1b]11;?") {
 		_, _ = b.stdin.Write([]byte("\x1b]11;rgb:0000/0000/0000\a"))
+	}
+	// XTVERSION / kitty keyboard protocol query — respond with a DCS version string.
+	if strings.Contains(raw, "\x1b[>0q") {
+		_, _ = b.stdin.Write([]byte("\x1bP>|test(0)\x1b\\"))
+	}
+	// DECRQM (DEC Request Mode \x1b[?Ps$p) — respond "not recognized" for each mode.
+	for _, m := range decrqmRe.FindAllStringSubmatch(raw, -1) {
+		_, _ = b.stdin.Write([]byte("\x1b[?" + m[1] + ";0$y"))
 	}
 }
 
@@ -251,6 +262,11 @@ func selectApp(t *testing.T, stdin io.Writer, out *outBuf, name string) {
 	if idx < 0 {
 		t.Fatalf("unknown app %q", name)
 	}
+	// When Logto is configured, a "login" entry is prepended to the menu for
+	// unauthenticated guests, shifting all app positions by 1.
+	if strings.Contains(out.text(), "Authenticate to claim your nick") {
+		idx++
+	}
 	for i := 0; i < idx; i++ {
 		_, _ = stdin.Write([]byte("j"))
 		time.Sleep(50 * time.Millisecond)
@@ -310,7 +326,9 @@ func TestMenuDisplayed(t *testing.T) {
 func TestGuestUsername(t *testing.T) {
 	_, out, _ := ptySession(t, sshClient(t))
 
-	if !out.waitFor("guest-", 5*time.Second) {
+	// Without Logto the guest shows as "guest-{sessionID}".
+	// With Logto the same connection shows as "sshuser-{keyhash}" (key-first identity).
+	if !out.waitFor("guest-", 5*time.Second) && !out.waitFor("sshuser-", 2*time.Second) {
 		t.Fatalf("guest username not in menu:\n%s", out.text())
 	}
 }

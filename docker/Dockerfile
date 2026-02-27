@@ -19,5 +19,6 @@ COPY --from=builder /build/sshland /usr/local/bin/sshland
 USER sshland
 
 EXPOSE 2222
+EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/sshland"]
