@@ -1,7 +1,6 @@
-# Build the wrapper natively and cross-compile to amd64 — avoids QEMU crashes
-# when building on arm64 hosts. The final stage is amd64 because @opentui/core-linux-arm64
-# is missing symbols required by tobby; the x64 build works correctly.
-FROM golang:1.23-alpine AS go-builder
+# go-builder runs on the native build platform (no QEMU). The wrapper is
+# cross-compiled to match whatever TARGETARCH Docker resolves (amd64 or arm64).
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS go-builder
 
 WORKDIR /build
 
@@ -9,9 +8,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN GOARCH=amd64 GOOS=linux go build -o /build/wrapper-bin ./wrapper/
 
-FROM --platform=linux/amd64 oven/bun:alpine
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /build/wrapper-bin ./wrapper/
+
+# Final stage: native platform on the VPS (no emulation).
+# Previously pinned to linux/amd64 to work around missing @opentui/core-linux-arm64
+# symbols, but that caused QEMU crashes on arm64 hosts. Run natively; if the
+# arm64 @opentui binaries are still broken the error will be at runtime, not build.
+FROM oven/bun:alpine
 
 # Install bun packages to /opt/bun (world-readable) so the sshland user can
 # access them at runtime. BUN_INSTALL must be set before any bun install call.
@@ -37,8 +43,6 @@ RUN bun install -g @mattfillipe/tobby && \
 # node_modules/ but also writes a second copy into tobby's nested .bun/ cache.
 # Two WASM instances → BindingError: "Expected null or instance of Node, got an instance of Node"
 # Fix: delete tobby's nested copy; all modules fall through to the hoisted global one.
-# This step is fast and lives in a separate layer so it can be iterated without
-# re-downloading the 595-package tobby install above.
 RUN rm -rf /opt/bun/install/global/node_modules/@mattfillipe/tobby/node_modules/.bun/*/node_modules/yoga-layout
 
 ENV HOME=/home/sshland
