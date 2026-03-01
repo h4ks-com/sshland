@@ -62,6 +62,11 @@ func saveIdentity(dir string, key gossh.PublicKey, id Identity) error {
 	return closeErr
 }
 
+// deleteIdentity removes the stored identity file for key.
+func deleteIdentity(dir string, key gossh.PublicKey) error {
+	return os.Remove(filepath.Join(dir, keyFingerprint(key)))
+}
+
 // sshuserName returns a deterministic throwaway name for an unrecognised key.
 func sshuserName(key gossh.PublicKey) string {
 	return "sshuser-" + keyFingerprint(key)[:4]

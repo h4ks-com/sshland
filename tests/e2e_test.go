@@ -243,8 +243,8 @@ func ptySession(t *testing.T, cl *gossh.Client) (io.WriteCloser, *outBuf, *gossh
 	return stdin, out, sess
 }
 
-// menuOrder matches the order in docker/config.yaml.
-var menuOrder = []string{"chat", "tobby", "hanb", "wordle"}
+// menuOrder lists guest-visible apps (tobby requires auth, so guests don't see it).
+var menuOrder = []string{"chat", "hanb", "wordle"}
 
 // selectApp waits for the menu and navigates to the named app.
 func selectApp(t *testing.T, stdin io.Writer, out *outBuf, name string) {
@@ -353,26 +353,13 @@ func TestHanb(t *testing.T) {
 }
 
 func TestTobby(t *testing.T) {
-	stdin, out, _ := ptySession(t, sshClient(t))
-	selectApp(t, stdin, out, "tobby")
-
-	// tobby shows a setup dialog ("Nickname", "Port") on first run, or connects
-	// to IRC and shows the channel ("#dev") on subsequent runs. Either way the
-	// tobby UI must have actually rendered — a crash would show an error instead.
-	deadline := time.Now().Add(12 * time.Second)
-	for time.Now().Before(deadline) {
-		text := out.text()
-		if strings.Contains(text, "connection error") || strings.Contains(text, "Symbol") {
-			t.Fatalf("tobby failed:\n%s", text)
-		}
-		// "Nickname" appears in tobby's setup dialog.
-		// "irc.h4ks" appears in tobby's connected view (server name).
-		// Neither appears in the sshland menu, so both are safe positive signals.
-		// ("#dev" is NOT used here: the menu itself contains "IRC client (#dev on h4ks.com)")
-		if strings.Contains(text, "Nickname") || strings.Contains(text, "irc.h4ks") {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	_, out, _ := ptySession(t, sshClient(t))
+	if !out.waitFor("sshland", 5*time.Second) {
+		t.Fatalf("menu did not appear; output:\n%s", out.text())
 	}
-	t.Fatalf("tobby UI never appeared:\n%s", out.text())
+	// tobby requires auth; guests never see it in the menu.
+	if !strings.Contains(out.text(), "tobby") {
+		t.Skip("tobby not visible (requires auth, running as guest)")
+	}
+	t.Fatal("tobby unexpectedly visible to guest")
 }

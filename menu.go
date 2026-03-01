@@ -76,12 +76,24 @@ func newMenuModel(apps []AppConfig, username string, isNew, isGuest bool, sess c
 	}
 }
 
-// visibleApps prepends a Login entry for any unauthenticated guest when Logto is configured.
+// visibleApps filters auth-required apps for guests, prepends login for guests,
+// and appends logout for authenticated users when Logto is configured.
 func (m menuModel) visibleApps() []AppConfig {
-	if m.loginCfg != nil && m.isGuest {
-		return append([]AppConfig{{Name: "login", Description: "Authenticate to claim your nick"}}, m.apps...)
+	var apps []AppConfig
+	for _, a := range m.apps {
+		if a.RequiresAuth && m.isGuest {
+			continue
+		}
+		apps = append(apps, a)
 	}
-	return m.apps
+	if m.loginCfg != nil {
+		if m.isGuest {
+			apps = append([]AppConfig{{Name: "login", Description: "Authenticate to claim your nick"}}, apps...)
+		} else {
+			apps = append(apps, AppConfig{Name: "logout", Description: "Remove this key's login and sign out"})
+		}
+	}
+	return apps
 }
 
 func waitForAuthCmd(ch chan AuthResult) tea.Cmd {
@@ -169,6 +181,14 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						url: m.loginCfg.BuildAuthURL(state),
 					}
 					return m, tea.Batch(waitForAuthCmd(ch), tickCmd())
+				}
+				if selected.Name == "logout" {
+					if m.publicKey != nil && m.loginCfg != nil {
+						_ = deleteIdentity(m.loginCfg.IdentitiesDir, m.publicKey)
+					}
+					m.sess.Context().SetValue(usernameKey{}, sshuserName(m.publicKey))
+					m.sess.Context().SetValue(isGuestKey{}, true)
+					return m, tea.Quit
 				}
 				m.sess.Context().SetValue(selectedAppKey{}, selected)
 			}

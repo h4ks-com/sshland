@@ -227,9 +227,34 @@ func NewCallbackHandler(mgr *PendingAuthManager, cfg *LogtoConfig) http.Handler 
 			return
 		}
 		if err := mgr.Complete(state, code, cfg); err != nil {
-			_, _ = fmt.Fprintf(w, "Authentication failed. Please try again.")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.WriteString(w, callbackHTML("Authentication failed", "Something went wrong. Please try again.", false))
 			return
 		}
-		_, _ = fmt.Fprintf(w, "You can close this tab.")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, callbackHTML("Authenticated", "You're in. Head back to your terminal.", true))
 	})
+}
+
+func callbackHTML(title, message string, ok bool) string {
+	color := "#e05"
+	symbol := "✗"
+	if ok {
+		color = "#0c8"
+		symbol = "✓"
+	}
+	return `<!doctype html><html><head><meta charset=utf-8>` +
+		`<title>sshland</title>` +
+		`<style>*{box-sizing:border-box;margin:0;padding:0}` +
+		`body{display:flex;align-items:center;justify-content:center;min-height:100vh;` +
+		`background:#0d0d0d;font-family:ui-monospace,monospace;color:#ccc}` +
+		`main{text-align:center;padding:2rem}` +
+		`.icon{font-size:3rem;color:` + color + `;line-height:1;margin-bottom:1rem}` +
+		`h1{font-size:1.1rem;font-weight:600;color:#eee;margin-bottom:.5rem}` +
+		`p{font-size:.85rem;color:#666}</style></head>` +
+		`<body><main>` +
+		`<div class=icon>` + symbol + `</div>` +
+		`<h1>` + title + `</h1>` +
+		`<p>` + message + `</p>` +
+		`</main></body></html>`
 }
