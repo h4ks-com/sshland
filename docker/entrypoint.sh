@@ -1,12 +1,10 @@
 #!/bin/sh
 set -e
 
-# Create data subdirectories as root before dropping to the sshland user.
-# Needed when /data is a host bind-mount owned by root (e.g. Coolify deployments).
-NICKS_DIR="${NICKS_DIR:-/data/nicks}"
-IDENTITIES_DIR="${IDENTITIES_DIR:-/data/identities}"
-
-mkdir -p "$NICKS_DIR" "$IDENTITIES_DIR"
-chown sshland:sshland "$NICKS_DIR" "$IDENTITIES_DIR"
+# Both /data and /proxy_key can be root-owned when created by Coolify or
+# docker compose before the image runs. Chown them as root before dropping
+# to the sshland user so the app can write host_key, nicks/, identities/,
+# and the proxy key that wrapper containers read back.
+chown sshland:sshland /data /proxy_key
 
 exec su-exec sshland /usr/local/bin/sshland "$@"
