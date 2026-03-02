@@ -1,6 +1,4 @@
-# go-builder runs on the native build platform (no QEMU). The wrapper is
-# cross-compiled to match whatever TARGETARCH Docker resolves (amd64 or arm64).
-FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS go-builder
+FROM golang:1.23-alpine AS go-builder
 
 WORKDIR /build
 
@@ -9,14 +7,8 @@ RUN go mod download
 
 COPY . .
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /build/wrapper-bin ./wrapper/
+RUN go build -o /build/wrapper-bin ./wrapper/
 
-# Final stage: native platform on the VPS (no emulation).
-# Previously pinned to linux/amd64 to work around missing @opentui/core-linux-arm64
-# symbols, but that caused QEMU crashes on arm64 hosts. Run natively; if the
-# arm64 @opentui binaries are still broken the error will be at runtime, not build.
 FROM oven/bun:alpine
 
 # Install bun packages to /opt/bun (world-readable) so the sshland user can
