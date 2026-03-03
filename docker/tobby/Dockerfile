@@ -16,7 +16,7 @@ FROM oven/bun:alpine
 ENV BUN_INSTALL=/opt/bun
 
 # Create non-root user and install tobby globally into /opt/bun.
-RUN addgroup -S sshland && adduser -S -G sshland sshland && \
+RUN addgroup -S sshland && adduser -S -G sshland -s /sbin/nologin sshland && \
     mkdir -p /home/sshland /data /proxy_key && \
     chown sshland:sshland /home/sshland /data /proxy_key
 
@@ -37,19 +37,16 @@ RUN bun install -g @mattfillipe/tobby && \
 # Fix: delete tobby's nested copy; all modules fall through to the hoisted global one.
 RUN rm -rf /opt/bun/install/global/node_modules/@mattfillipe/tobby/node_modules/.bun/*/node_modules/yoga-layout
 
-ENV HOME=/home/sshland
+ENV HOME=/home/sshland \
+    IRC_SERVER=irc.h4ks.com \
+    IRC_PORT=6697 \
+    IRC_CHANNEL=#dev
+
+COPY docker/tobby/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 USER sshland
 
 EXPOSE 2222
 
-ENTRYPOINT ["/usr/local/bin/wrapper", "/usr/local/bin/tobby", \
-    "--db", "/data/{username}.sqlite", \
-    "--server", "irc.h4ks.com", \
-    "--port", "6697", \
-    "--ssl", \
-    "--nick", "{username}", \
-    "--setup-if-not-configured", \
-    "--channel", "#dev", \
-    "--restrict-server", "irc.h4ks.com", \
-    "--restrict-user", "{username}"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

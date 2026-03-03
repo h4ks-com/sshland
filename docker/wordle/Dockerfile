@@ -14,7 +14,7 @@ RUN git clone https://github.com/davidcroda/sshwordle.git && \
 FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates && \
-    addgroup -S sshland && adduser -S -G sshland -h /home/sshland sshland && \
+    addgroup -S sshland && adduser -S -G sshland -h /home/sshland -s /sbin/nologin sshland && \
     mkdir -p /home/sshland && chown sshland:sshland /home/sshland
 
 # Copy the whole repo directory so runtime word-list files are present alongside the binary

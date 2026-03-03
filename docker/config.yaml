@@ -5,7 +5,7 @@ apps:
     port: 2022
 
   - name: "tobby"
-    description: "IRC client (#dev on h4ks.com)"
+    description: "IRC client (irc.h4ks.com)"
     host: "tobby"
     port: 2222
     requires_auth: true

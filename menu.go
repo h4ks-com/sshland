@@ -181,7 +181,7 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.loginState = &loginWaitState{
 						url: m.loginCfg.BuildAuthURL(state),
 					}
-					return m, tea.Batch(waitForAuthCmd(ch), tickCmd())
+					return m, tea.Batch(waitForAuthCmd(ch), tickCmd(), tea.ClearScreen)
 				}
 				if selected.Name == "logout" {
 					if m.publicKey != nil && m.loginCfg != nil {

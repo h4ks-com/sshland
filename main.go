@@ -220,8 +220,8 @@ func makeSessionMiddleware(cfg Config, logtoConfig *LogtoConfig, pendingMgr *Pen
 			// receive a pipe-backed reader so cancelreader uses kqueue/epoll
 			// instead of the goroutine fallback — preventing the stale-
 			// goroutine race that drops the first keystroke on transitions.
-			mux := newSSHInputMux(sess)
 			renderer := bm.MakeRenderer(sess)
+			mux := newSSHInputMux(sess)
 			firstRun := true
 			for {
 				username, _ := sess.Context().Value(usernameKey{}).(string)

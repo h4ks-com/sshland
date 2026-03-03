@@ -13,7 +13,7 @@ RUN apk add --no-cache git && \
 FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates openssh-keygen && \
-    addgroup -S sshland && adduser -S -G sshland sshland && \
+    addgroup -S sshland && adduser -S -G sshland -s /sbin/nologin sshland && \
     mkdir -p /data && chown sshland:sshland /data
 
 COPY --from=builder /app/ssh-chat/ssh-chat /usr/local/bin/ssh-chat

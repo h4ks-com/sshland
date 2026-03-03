@@ -55,6 +55,11 @@ func loadProxyPublicKey(path string) (gossh.PublicKey, error) {
 func handleSession(command string, args []string) wish.Middleware {
 	return func(next cssh.Handler) cssh.Handler {
 		return func(sess cssh.Session) {
+			if len(sess.Command()) > 0 {
+				_, _ = fmt.Fprintln(sess, "exec not supported")
+				next(sess)
+				return
+			}
 			username := sess.User()
 			resolved := make([]string, len(args))
 			for i, a := range args {

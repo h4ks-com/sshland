@@ -11,7 +11,7 @@ RUN go build -o sshland .
 FROM alpine:3.21
 
 RUN apk add --no-cache ca-certificates su-exec && \
-    addgroup -S sshland && adduser -S -G sshland sshland && \
+    addgroup -S sshland && adduser -S -G sshland -s /sbin/nologin sshland && \
     mkdir -p /proxy_key && chown sshland:sshland /proxy_key
 
 COPY --from=builder /build/sshland /usr/local/bin/sshland
