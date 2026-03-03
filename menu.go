@@ -144,13 +144,14 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// makeAppMiddleware uses the Logto username, not the original SSH username.
 		m.sess.Context().SetValue(usernameKey{}, msg.Username)
 		m.sess.Context().SetValue(isGuestKey{}, false)
-		return m, nil
+		return m, tea.ClearScreen
 
 	case tea.KeyMsg:
 		if m.loginState != nil {
 			// Only allow cancellation while waiting for auth.
 			if key.Matches(msg, keys.Quit) {
 				m.loginState = nil
+				return m, tea.ClearScreen
 			}
 			return m, nil
 		}
@@ -310,7 +311,7 @@ func (m menuModel) menuView() string {
 		out += welcomeStyle.Render(fmt.Sprintf("Welcome to h4ks.com, %s!", m.username)) + "\n"
 	}
 
-	out += titleStyle.Render("sshland") + "\n"
+	out += titleStyle.Render("Welcome to h4ks - sshland !") + "\n"
 	if m.isGuest {
 		out += userStyle.Render(fmt.Sprintf("not authenticated · %s", m.username)) + "\n"
 	} else {

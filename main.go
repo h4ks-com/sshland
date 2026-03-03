@@ -212,42 +212,64 @@ func makeTerminalMiddleware(logtoConfig *LogtoConfig) wish.Middleware {
 	}
 }
 
-func makeMenuHandler(cfg Config, logtoConfig *LogtoConfig, pendingMgr *PendingAuthManager) func(sess cssh.Session) (tea.Model, []tea.ProgramOption) {
-	return func(sess cssh.Session) (tea.Model, []tea.ProgramOption) {
-		username, ok := sess.Context().Value(usernameKey{}).(string)
-		if !ok || username == "" {
-			username = guestName(sess.Context())
-		}
-		isNew, _ := sess.Context().Value(isNewNickKey{}).(bool)
-		isGuest, _ := sess.Context().Value(isGuestKey{}).(bool)
-		renderer := bm.MakeRenderer(sess)
-
-		var publicKey gossh.PublicKey
-		if logtoConfig != nil {
-			publicKey, _ = sess.Context().Value(authPublicKeyKey{}).(gossh.PublicKey)
-		}
-
-		m := newMenuModel(cfg.Apps, username, isNew, isGuest, sess, renderer, logtoConfig, pendingMgr, publicKey)
-		return m, []tea.ProgramOption{tea.WithAltScreen()}
-	}
-}
-
-func makeAppMiddleware() wish.Middleware {
+func makeSessionMiddleware(cfg Config, logtoConfig *LogtoConfig, pendingMgr *PendingAuthManager) wish.Middleware {
 	return func(next cssh.Handler) cssh.Handler {
 		return func(sess cssh.Session) {
-			app, ok := sess.Context().Value(selectedAppKey{}).(AppConfig)
-			if !ok {
-				// user quit without selecting
-				next(sess)
-				return
-			}
-			username, _ := sess.Context().Value(usernameKey{}).(string)
-			if username == "" {
-				username = sess.User()
-			}
-			log.Printf("proxying %s to %s as %s", sess.RemoteAddr(), app.Addr(), username)
-			if err := Connect(sess, app, username); err != nil {
-				_, _ = fmt.Fprintf(sess.Stderr(), "connection error: %v\n", err)
+			// Single goroutine owns all reads from the SSH session for the
+			// lifetime of this connection. Per-iteration BubbleTea programs
+			// receive a pipe-backed reader so cancelreader uses kqueue/epoll
+			// instead of the goroutine fallback — preventing the stale-
+			// goroutine race that drops the first keystroke on transitions.
+			mux := newSSHInputMux(sess)
+			renderer := bm.MakeRenderer(sess)
+			firstRun := true
+			for {
+				username, _ := sess.Context().Value(usernameKey{}).(string)
+				if username == "" {
+					username = guestName(sess.Context())
+				}
+				isNew, _ := sess.Context().Value(isNewNickKey{}).(bool)
+				isGuest, _ := sess.Context().Value(isGuestKey{}).(bool)
+				var publicKey gossh.PublicKey
+				if logtoConfig != nil {
+					publicKey, _ = sess.Context().Value(authPublicKeyKey{}).(gossh.PublicKey)
+				}
+
+				sess.Context().SetValue(selectedAppKey{}, nil)
+
+				m := newMenuModel(cfg.Apps, username, isNew && firstRun, isGuest, sess, renderer, logtoConfig, pendingMgr, publicKey)
+				firstRun = false
+
+				pipe, err := newSSHPipe(mux)
+				if err != nil {
+					log.Printf("sshland: creating input pipe: %v", err)
+					break
+				}
+				opts := append(bm.MakeOptions(sess), tea.WithAltScreen(), tea.WithInput(&sshPipeFile{pipe}))
+				_, runErr := tea.NewProgram(m, opts...).Run()
+				pipe.stop()
+				if runErr != nil {
+					break
+				}
+
+				app, ok := sess.Context().Value(selectedAppKey{}).(AppConfig)
+				if !ok || app.Name == "" {
+					newIsGuest, _ := sess.Context().Value(isGuestKey{}).(bool)
+					if newIsGuest != isGuest {
+						continue // logout → show menu again as guest
+					}
+					break // q pressed → close connection
+				}
+
+				currentUser, _ := sess.Context().Value(usernameKey{}).(string)
+				if currentUser == "" {
+					currentUser = username
+				}
+				log.Printf("proxying %s to %s as %s", sess.RemoteAddr(), app.Addr(), currentUser)
+				if err := Connect(sess, app, currentUser, mux); err != nil {
+					_, _ = fmt.Fprintf(sess.Stderr(), "connection error: %v\n", err)
+				}
+				// Loop → menu reappears.
 			}
 			next(sess)
 		}
@@ -298,8 +320,7 @@ func main() {
 		}),
 		wish.WithIdleTimeout(10*time.Minute),
 		wish.WithMiddleware(
-			makeAppMiddleware(),
-			bm.Middleware(makeMenuHandler(cfg, logtoConfig, pendingMgr)),
+			makeSessionMiddleware(cfg, logtoConfig, pendingMgr),
 			makeTerminalMiddleware(logtoConfig),
 			logging.Middleware(),
 			ratelimiter.Middleware(ratelimiter.NewRateLimiter(rate.Every(time.Second), 10, 1000)),

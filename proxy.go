@@ -54,14 +54,14 @@ func getProxySigner() gossh.Signer {
 			return
 		}
 		_ = os.MkdirAll(filepath.Dir(path), 0700)
-		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0644); err != nil {
+		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
 			log.Printf("proxy: could not persist proxy key to %s: %v", path, err)
 		}
 	})
 	return proxySigner
 }
 
-func Connect(sess cssh.Session, app AppConfig, username string) error {
+func Connect(sess cssh.Session, app AppConfig, username string, mux *sshInputMux) error {
 	ptyReq, winCh, isPty := sess.Pty()
 	if !isPty {
 		return fmt.Errorf("no PTY requested")
@@ -87,7 +87,17 @@ func Connect(sess cssh.Session, app AppConfig, username string) error {
 	}
 	defer func() { _ = remote.Close() }()
 
-	remote.Stdin = sess
+	// Use StdinPipe instead of remote.Stdin so the SSH library does NOT start
+	// its own stdin copy goroutine. That goroutine would block on mux.ch
+	// waiting for the next keypress even after the remote process exits, and
+	// remote.Wait() would not return until a key arrived — consuming and
+	// discarding that first key. With StdinPipe, Wait() returns as soon as
+	// stdout/stderr are done, and we cancel our goroutine immediately.
+	stdinW, err := remote.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("getting stdin pipe: %w", err)
+	}
+
 	remote.Stdout = sess
 	remote.Stderr = sess.Stderr()
 
@@ -110,5 +120,25 @@ func Connect(sess cssh.Session, app AppConfig, username string) error {
 		return fmt.Errorf("starting shell: %w", err)
 	}
 
-	return remote.Wait()
+	done := make(chan struct{})
+	go func() {
+		defer func() { _ = stdinW.Close() }()
+		for {
+			select {
+			case <-done:
+				return
+			case chunk, ok := <-mux.ch:
+				if !ok {
+					return
+				}
+				if _, err := stdinW.Write(chunk); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	err = remote.Wait()
+	close(done) // stops the stdin goroutine without consuming from mux.ch
+	return err
 }
