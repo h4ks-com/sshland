@@ -160,13 +160,26 @@ func Connect(sess cssh.Session, app AppConfig, username string, mux *sshInputMux
 	}
 
 	if app.RequiresAgent {
-		pass, err := deriveAgentPassphrase(sess)
-		if err != nil {
-			log.Printf("proxy: agent passphrase for %s: %v", username, err)
-		} else if pass != "" {
+		pass, agentErr := deriveAgentPassphrase(sess)
+		if agentErr != nil {
+			log.Printf("proxy: agent passphrase for %s: %v", username, agentErr)
+		}
+		if pass != "" {
 			if err := remote.Setenv("SSHLAND_DB_PASS", pass); err != nil {
 				log.Printf("proxy: setenv db pass: %v", err)
 			}
+		} else {
+			// Tell the user before tobby's TUI starts so they know encryption is off.
+			var why string
+			switch {
+			case agentErr != nil:
+				why = agentErr.Error()
+			case !cssh.AgentRequested(sess):
+				why = "reconnect with ssh -A to enable encryption"
+			default:
+				why = "auth key not found in forwarded agent"
+			}
+			_, _ = fmt.Fprintf(sess, "\r\n\x1b[33m⚠  tobby: no DB encryption (%s)\x1b[0m\r\n  Passwords will be stored unencrypted.\r\n\r\n", why)
 		}
 	}
 
