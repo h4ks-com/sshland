@@ -60,7 +60,7 @@ func getProxySigner() gossh.Signer {
 			return
 		}
 		_ = os.MkdirAll(filepath.Dir(path), 0700)
-		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
+		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0644); err != nil {
 			log.Printf("proxy: could not persist proxy key to %s: %v", path, err)
 		}
 	})

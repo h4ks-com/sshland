@@ -90,6 +90,9 @@ services:
     volumes:
       - hanb_data:/data
       - proxy_key:/proxy_key:ro
+    tmpfs:
+      - /tmp
+    read_only: true
     networks:
       - mesh
     restart: always
@@ -113,6 +116,10 @@ services:
     volumes:
       - tobby_data:/data
       - proxy_key:/proxy_key:ro
+    tmpfs:
+      - /tmp
+      - /home/sshland
+    read_only: true
     networks:
       - mesh
       - tobby-egress

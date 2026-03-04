@@ -332,11 +332,11 @@ func (m menuModel) menuView() string {
 			cmd := hintCmdStyle.Render("ssh-copy-id yournick@h4ks.com")
 			out += hintStyle.Render("Want to keep a nick? Run: "+cmd) + "\n"
 		}
+		out += titleStyle.Render("Welcome to h4ks - sshland !") + "\n"
 	} else {
 		out += welcomeStyle.Render(fmt.Sprintf("Welcome to h4ks.com, %s!", m.username)) + "\n"
 	}
 
-	out += titleStyle.Render("Welcome to h4ks - sshland !") + "\n"
 	if m.isGuest {
 		out += userStyle.Render(fmt.Sprintf("not authenticated · %s", m.username)) + "\n"
 	} else {
