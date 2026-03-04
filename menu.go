@@ -25,27 +25,23 @@ type loginWaitState struct {
 
 var spinnerFrames = []string{"◌", "◍", "◎", "●", "◎", "◍"}
 
-// menuItem wraps an AppConfig with disabled state for agent-gated apps.
 type menuItem struct {
-	app      AppConfig
-	disabled bool
-	reason   string
+	app AppConfig
 }
 
 type menuModel struct {
-	apps           []AppConfig
-	cursor         int
-	username       string
-	isNew          bool
-	isGuest        bool
-	agentAvailable bool
-	sess           cssh.Session
-	renderer       *lipgloss.Renderer
-	loginCfg       *LogtoConfig
-	pendingMgr     *PendingAuthManager
-	publicKey      gossh.PublicKey
-	loginState     *loginWaitState
-	width          int
+	apps       []AppConfig
+	cursor     int
+	username   string
+	isNew      bool
+	isGuest    bool
+	sess       cssh.Session
+	renderer   *lipgloss.Renderer
+	loginCfg   *LogtoConfig
+	pendingMgr *PendingAuthManager
+	publicKey  gossh.PublicKey
+	loginState *loginWaitState
+	width      int
 }
 
 type keyMap struct {
@@ -70,24 +66,22 @@ var keys = keyMap{
 	),
 }
 
-func newMenuModel(apps []AppConfig, username string, isNew, isGuest bool, sess cssh.Session, renderer *lipgloss.Renderer, loginCfg *LogtoConfig, pendingMgr *PendingAuthManager, publicKey gossh.PublicKey, agentAvailable bool) menuModel {
+func newMenuModel(apps []AppConfig, username string, isNew, isGuest bool, sess cssh.Session, renderer *lipgloss.Renderer, loginCfg *LogtoConfig, pendingMgr *PendingAuthManager, publicKey gossh.PublicKey) menuModel {
 	return menuModel{
-		apps:           apps,
-		username:       username,
-		isNew:          isNew,
-		isGuest:        isGuest,
-		agentAvailable: agentAvailable,
-		sess:           sess,
-		renderer:       renderer,
-		loginCfg:       loginCfg,
-		pendingMgr:     pendingMgr,
-		publicKey:      publicKey,
+		apps:       apps,
+		username:   username,
+		isNew:      isNew,
+		isGuest:    isGuest,
+		sess:       sess,
+		renderer:   renderer,
+		loginCfg:   loginCfg,
+		pendingMgr: pendingMgr,
+		publicKey:  publicKey,
 	}
 }
 
-// visibleApps filters auth-required apps for guests, shows agent-required apps
-// as disabled when agent forwarding is unavailable, and prepends login / appends
-// logout when Logto is configured.
+// visibleApps filters auth-required apps for guests and prepends login /
+// appends logout when Logto is configured.
 func (m menuModel) visibleApps() []menuItem {
 	var items []menuItem
 	if m.loginCfg != nil && m.isGuest {
@@ -97,11 +91,7 @@ func (m menuModel) visibleApps() []menuItem {
 		if a.RequiresAuth && m.isGuest {
 			continue
 		}
-		if a.RequiresAgent && !m.agentAvailable {
-			items = append(items, menuItem{app: a, disabled: true, reason: "requires ssh -A"})
-		} else {
-			items = append(items, menuItem{app: a})
-		}
+		items = append(items, menuItem{app: a})
 	}
 	if m.loginCfg != nil && !m.isGuest {
 		items = append(items, menuItem{app: AppConfig{Name: "logout", Description: "Remove this key's login and sign out"}})
@@ -187,11 +177,7 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Enter):
 			items := m.visibleApps()
 			if len(items) > 0 {
-				item := items[m.cursor]
-				if item.disabled {
-					return m, nil
-				}
-				selected := item.app
+				selected := items[m.cursor].app
 				if selected.Name == "login" {
 					state := newRandomState()
 					ch := m.pendingMgr.Register(state, m.publicKey)
@@ -310,14 +296,6 @@ func (m menuModel) menuView() string {
 	normalStyle := r.NewStyle().
 		Foreground(lipgloss.Color("252"))
 
-	disabledStyle := r.NewStyle().
-		Foreground(lipgloss.Color("255")).
-		Italic(true)
-
-	disabledDescStyle := r.NewStyle().
-		Foreground(lipgloss.Color("245")).
-		Italic(true)
-
 	descStyle := r.NewStyle().
 		Foreground(lipgloss.Color("241"))
 
@@ -354,14 +332,7 @@ func (m menuModel) menuView() string {
 			cursor = "> "
 		}
 		var nameRender, desc string
-		if item.disabled {
-			nameRender = disabledStyle.Render(item.app.Name)
-			descText := "  " + item.app.Description
-			if item.reason != "" {
-				descText += "  [" + item.reason + "]"
-			}
-			desc = disabledDescStyle.Render(descText)
-		} else if i == m.cursor {
+		if i == m.cursor {
 			nameRender = selectedStyle.Render(item.app.Name)
 			desc = descStyle.Render("  " + item.app.Description)
 		} else {

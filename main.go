@@ -234,11 +234,10 @@ func makeSessionMiddleware(cfg Config, logtoConfig *LogtoConfig, pendingMgr *Pen
 				isNew, _ := sess.Context().Value(isNewNickKey{}).(bool)
 				isGuest, _ := sess.Context().Value(isGuestKey{}).(bool)
 				publicKey, _ := sess.Context().Value(authPublicKeyKey{}).(gossh.PublicKey)
-				agentAvailable := cssh.AgentRequested(sess)
 
 				sess.Context().SetValue(selectedAppKey{}, nil)
 
-				m := newMenuModel(cfg.Apps, username, isNew && firstRun, isGuest, sess, renderer, logtoConfig, pendingMgr, publicKey, agentAvailable)
+				m := newMenuModel(cfg.Apps, username, isNew && firstRun, isGuest, sess, renderer, logtoConfig, pendingMgr, publicKey)
 				firstRun = false
 
 				pipe, err := newSSHPipe(mux)

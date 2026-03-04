@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,7 +16,6 @@ import (
 	cssh "github.com/charmbracelet/ssh"
 	"golang.org/x/crypto/hkdf"
 	gossh "golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
 )
 
 // proxyKey is an ED25519 keypair used exclusively for entry-menu → wrapper
@@ -70,39 +68,21 @@ func getProxySigner() gossh.Signer {
 	return proxySigner
 }
 
-// deriveAgentPassphrase asks the forwarded SSH agent to sign a fixed challenge
-// with the user's auth key, then derives a 64-char hex passphrase via HKDF.
-// Returns ("", nil) when the agent is unavailable or the key is not in the agent.
-func deriveAgentPassphrase(sess cssh.Session) (string, error) {
-	if !cssh.AgentRequested(sess) {
-		return "", nil
-	}
+// derivePassphrase signs the user's auth public key with the server's proxy
+// Ed25519 key and derives a 64-char hex passphrase via HKDF.
+// Ed25519 signing is deterministic (RFC 8032), so the same proxy key + same
+// user pubkey always yields the same passphrase across sessions.
+// Returns ("", nil) when no auth public key is present.
+func derivePassphrase(sess cssh.Session) (string, error) {
 	authKey, _ := sess.Context().Value(authPublicKeyKey{}).(gossh.PublicKey)
 	if authKey == nil {
 		return "", nil
 	}
-
-	listener, err := cssh.NewAgentListener()
+	sig, err := getProxySigner().Sign(rand.Reader, authKey.Marshal())
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("proxy key sign: %w", err)
 	}
-	defer func() { _ = listener.Close() }()
-	go cssh.ForwardAgentConnections(listener, sess)
-
-	conn, err := net.Dial("unix", listener.Addr().String())
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = conn.Close() }()
-
-	ag := agent.NewClient(conn)
-	sig, err := ag.Sign(authKey, []byte("sshland-tobby-key-v1"))
-	if err != nil {
-		// Key not in agent; tobby runs without encryption.
-		return "", err
-	}
-
-	r := hkdf.New(sha256.New, sig.Blob, []byte("sshland-tobby-pass-v1"), nil)
+	r := hkdf.New(sha256.New, sig.Blob, authKey.Marshal(), []byte("sshland-tobby-pass-v2"))
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(r, key); err != nil {
 		return "", err
@@ -159,27 +139,14 @@ func Connect(sess cssh.Session, app AppConfig, username string, mux *sshInputMux
 		return fmt.Errorf("requesting pty: %w", err)
 	}
 
-	if app.RequiresAgent {
-		pass, agentErr := deriveAgentPassphrase(sess)
-		if agentErr != nil {
-			log.Printf("proxy: agent passphrase for %s: %v", username, agentErr)
-		}
-		if pass != "" {
+	if app.EncryptDB {
+		pass, err := derivePassphrase(sess)
+		if err != nil {
+			log.Printf("proxy: passphrase for %s: %v", username, err)
+		} else if pass != "" {
 			if err := remote.Setenv("SSHLAND_DB_PASS", pass); err != nil {
 				log.Printf("proxy: setenv db pass: %v", err)
 			}
-		} else {
-			// Tell the user before tobby's TUI starts so they know encryption is off.
-			var why string
-			switch {
-			case agentErr != nil:
-				why = agentErr.Error()
-			case !cssh.AgentRequested(sess):
-				why = "reconnect with ssh -A to enable encryption"
-			default:
-				why = "auth key not found in forwarded agent"
-			}
-			_, _ = fmt.Fprintf(sess, "\r\n\x1b[33m⚠  tobby: no DB encryption (%s)\x1b[0m\r\n  Passwords will be stored unencrypted.\r\n\r\n", why)
 		}
 	}
 
