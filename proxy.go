@@ -38,6 +38,9 @@ func getProxySigner() gossh.Signer {
 			if err == nil {
 				if s, err := gossh.NewSignerFromKey(raw); err == nil {
 					proxySigner = s
+					// Ensure wrapper containers (non-root) can read the key,
+					// fixing volumes written by older deployments with 0600.
+					_ = os.Chmod(path, 0644)
 					return
 				}
 			}
