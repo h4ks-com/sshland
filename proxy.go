@@ -3,15 +3,21 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
 
 	cssh "github.com/charmbracelet/ssh"
+	"golang.org/x/crypto/hkdf"
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // proxyKey is an ED25519 keypair used exclusively for entry-menu → wrapper
@@ -61,6 +67,46 @@ func getProxySigner() gossh.Signer {
 	return proxySigner
 }
 
+// deriveAgentPassphrase asks the forwarded SSH agent to sign a fixed challenge
+// with the user's auth key, then derives a 64-char hex passphrase via HKDF.
+// Returns ("", nil) when the agent is unavailable or the key is not in the agent.
+func deriveAgentPassphrase(sess cssh.Session) (string, error) {
+	if !cssh.AgentRequested(sess) {
+		return "", nil
+	}
+	authKey, _ := sess.Context().Value(authPublicKeyKey{}).(gossh.PublicKey)
+	if authKey == nil {
+		return "", nil
+	}
+
+	listener, err := cssh.NewAgentListener()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = listener.Close() }()
+	go cssh.ForwardAgentConnections(listener, sess)
+
+	conn, err := net.Dial("unix", listener.Addr().String())
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = conn.Close() }()
+
+	ag := agent.NewClient(conn)
+	sig, err := ag.Sign(authKey, []byte("sshland-tobby-key-v1"))
+	if err != nil {
+		// Key not in agent; tobby runs without encryption.
+		return "", err
+	}
+
+	r := hkdf.New(sha256.New, sig.Blob, []byte("sshland-tobby-pass-v1"), nil)
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(r, key); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(key), nil
+}
+
 func Connect(sess cssh.Session, app AppConfig, username string, mux *sshInputMux) error {
 	ptyReq, winCh, isPty := sess.Pty()
 	if !isPty {
@@ -108,6 +154,17 @@ func Connect(sess cssh.Session, app AppConfig, username string, mux *sshInputMux
 	}
 	if err := remote.RequestPty(ptyReq.Term, ptyReq.Window.Height, ptyReq.Window.Width, modes); err != nil {
 		return fmt.Errorf("requesting pty: %w", err)
+	}
+
+	if app.RequiresAgent {
+		pass, err := deriveAgentPassphrase(sess)
+		if err != nil {
+			log.Printf("proxy: agent passphrase for %s: %v", username, err)
+		} else if pass != "" {
+			if err := remote.Setenv("SSHLAND_DB_PASS", pass); err != nil {
+				log.Printf("proxy: setenv db pass: %v", err)
+			}
+		}
 	}
 
 	go func() {

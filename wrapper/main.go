@@ -61,9 +61,21 @@ func handleSession(command string, args []string) wish.Middleware {
 				return
 			}
 			username := sess.User()
+
+			var dbPassphrase string
+			for _, env := range sess.Environ() {
+				if strings.HasPrefix(env, "SSHLAND_DB_PASS=") {
+					dbPassphrase = strings.TrimPrefix(env, "SSHLAND_DB_PASS=")
+					break
+				}
+			}
+
 			resolved := make([]string, len(args))
 			for i, a := range args {
 				resolved[i] = strings.ReplaceAll(a, "{username}", username)
+			}
+			if dbPassphrase != "" {
+				resolved = append(resolved, "--stdin-enc-key")
 			}
 			cmd := exec.Command(command, resolved...)
 
@@ -83,6 +95,10 @@ func handleSession(command string, args []string) wish.Middleware {
 				return
 			}
 			defer func() { _ = f.Close() }()
+
+			if dbPassphrase != "" {
+				_, _ = f.Write([]byte(dbPassphrase + "\n"))
+			}
 
 			setWinsize(f, ptyReq.Window.Width, ptyReq.Window.Height)
 

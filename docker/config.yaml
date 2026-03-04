@@ -9,6 +9,7 @@ apps:
     host: "tobby"
     port: 2222
     requires_auth: true
+    requires_agent: true
 
   - name: "hanb"
     description: "hanb shell"

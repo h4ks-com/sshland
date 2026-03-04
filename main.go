@@ -139,6 +139,7 @@ func makePublicKeyHandler(nicksDir string, logtoConfig *LogtoConfig) cssh.Option
 			if !isValidNick(nick) {
 				ctx.SetValue(usernameKey{}, guestName(ctx))
 				ctx.SetValue(isGuestKey{}, true)
+				ctx.SetValue(authPublicKeyKey{}, gossh.PublicKey(key))
 				return true
 			}
 			stored, err := loadNickKey(nicksDir, nick)
@@ -156,12 +157,14 @@ func makePublicKeyHandler(nicksDir string, logtoConfig *LogtoConfig) cssh.Option
 				}
 				ctx.SetValue(usernameKey{}, nick)
 				ctx.SetValue(isNewNickKey{}, true)
+				ctx.SetValue(authPublicKeyKey{}, gossh.PublicKey(key))
 				return true
 			}
 			if string(stored.Marshal()) != string(key.Marshal()) {
 				return false
 			}
 			ctx.SetValue(usernameKey{}, nick)
+			ctx.SetValue(authPublicKeyKey{}, gossh.PublicKey(key))
 			return true
 		}
 
@@ -230,14 +233,12 @@ func makeSessionMiddleware(cfg Config, logtoConfig *LogtoConfig, pendingMgr *Pen
 				}
 				isNew, _ := sess.Context().Value(isNewNickKey{}).(bool)
 				isGuest, _ := sess.Context().Value(isGuestKey{}).(bool)
-				var publicKey gossh.PublicKey
-				if logtoConfig != nil {
-					publicKey, _ = sess.Context().Value(authPublicKeyKey{}).(gossh.PublicKey)
-				}
+				publicKey, _ := sess.Context().Value(authPublicKeyKey{}).(gossh.PublicKey)
+				agentAvailable := cssh.AgentRequested(sess)
 
 				sess.Context().SetValue(selectedAppKey{}, nil)
 
-				m := newMenuModel(cfg.Apps, username, isNew && firstRun, isGuest, sess, renderer, logtoConfig, pendingMgr, publicKey)
+				m := newMenuModel(cfg.Apps, username, isNew && firstRun, isGuest, sess, renderer, logtoConfig, pendingMgr, publicKey, agentAvailable)
 				firstRun = false
 
 				pipe, err := newSSHPipe(mux)

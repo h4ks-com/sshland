@@ -25,19 +25,27 @@ type loginWaitState struct {
 
 var spinnerFrames = []string{"◌", "◍", "◎", "●", "◎", "◍"}
 
+// menuItem wraps an AppConfig with disabled state for agent-gated apps.
+type menuItem struct {
+	app      AppConfig
+	disabled bool
+	reason   string
+}
+
 type menuModel struct {
-	apps       []AppConfig
-	cursor     int
-	username   string
-	isNew      bool
-	isGuest    bool
-	sess       cssh.Session
-	renderer   *lipgloss.Renderer
-	loginCfg   *LogtoConfig
-	pendingMgr *PendingAuthManager
-	publicKey  gossh.PublicKey
-	loginState *loginWaitState
-	width      int
+	apps           []AppConfig
+	cursor         int
+	username       string
+	isNew          bool
+	isGuest        bool
+	agentAvailable bool
+	sess           cssh.Session
+	renderer       *lipgloss.Renderer
+	loginCfg       *LogtoConfig
+	pendingMgr     *PendingAuthManager
+	publicKey      gossh.PublicKey
+	loginState     *loginWaitState
+	width          int
 }
 
 type keyMap struct {
@@ -62,38 +70,43 @@ var keys = keyMap{
 	),
 }
 
-func newMenuModel(apps []AppConfig, username string, isNew, isGuest bool, sess cssh.Session, renderer *lipgloss.Renderer, loginCfg *LogtoConfig, pendingMgr *PendingAuthManager, publicKey gossh.PublicKey) menuModel {
+func newMenuModel(apps []AppConfig, username string, isNew, isGuest bool, sess cssh.Session, renderer *lipgloss.Renderer, loginCfg *LogtoConfig, pendingMgr *PendingAuthManager, publicKey gossh.PublicKey, agentAvailable bool) menuModel {
 	return menuModel{
-		apps:       apps,
-		username:   username,
-		isNew:      isNew,
-		isGuest:    isGuest,
-		sess:       sess,
-		renderer:   renderer,
-		loginCfg:   loginCfg,
-		pendingMgr: pendingMgr,
-		publicKey:  publicKey,
+		apps:           apps,
+		username:       username,
+		isNew:          isNew,
+		isGuest:        isGuest,
+		agentAvailable: agentAvailable,
+		sess:           sess,
+		renderer:       renderer,
+		loginCfg:       loginCfg,
+		pendingMgr:     pendingMgr,
+		publicKey:      publicKey,
 	}
 }
 
-// visibleApps filters auth-required apps for guests, prepends login for guests,
-// and appends logout for authenticated users when Logto is configured.
-func (m menuModel) visibleApps() []AppConfig {
-	var apps []AppConfig
+// visibleApps filters auth-required apps for guests, shows agent-required apps
+// as disabled when agent forwarding is unavailable, and prepends login / appends
+// logout when Logto is configured.
+func (m menuModel) visibleApps() []menuItem {
+	var items []menuItem
+	if m.loginCfg != nil && m.isGuest {
+		items = append(items, menuItem{app: AppConfig{Name: "login", Description: "Authenticate to claim your nick"}})
+	}
 	for _, a := range m.apps {
 		if a.RequiresAuth && m.isGuest {
 			continue
 		}
-		apps = append(apps, a)
-	}
-	if m.loginCfg != nil {
-		if m.isGuest {
-			apps = append([]AppConfig{{Name: "login", Description: "Authenticate to claim your nick"}}, apps...)
+		if a.RequiresAgent && !m.agentAvailable {
+			items = append(items, menuItem{app: a, disabled: true, reason: "requires ssh -A"})
 		} else {
-			apps = append(apps, AppConfig{Name: "logout", Description: "Remove this key's login and sign out"})
+			items = append(items, menuItem{app: a})
 		}
 	}
-	return apps
+	if m.loginCfg != nil && !m.isGuest {
+		items = append(items, menuItem{app: AppConfig{Name: "logout", Description: "Remove this key's login and sign out"}})
+	}
+	return items
 }
 
 func waitForAuthCmd(ch chan AuthResult) tea.Cmd {
@@ -166,15 +179,19 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, keys.Down):
-			apps := m.visibleApps()
-			if m.cursor < len(apps)-1 {
+			items := m.visibleApps()
+			if m.cursor < len(items)-1 {
 				m.cursor++
 			}
 
 		case key.Matches(msg, keys.Enter):
-			apps := m.visibleApps()
-			if len(apps) > 0 {
-				selected := apps[m.cursor]
+			items := m.visibleApps()
+			if len(items) > 0 {
+				item := items[m.cursor]
+				if item.disabled {
+					return m, nil
+				}
+				selected := item.app
 				if selected.Name == "login" {
 					state := newRandomState()
 					ch := m.pendingMgr.Register(state, m.publicKey)
@@ -292,6 +309,14 @@ func (m menuModel) menuView() string {
 	normalStyle := r.NewStyle().
 		Foreground(lipgloss.Color("252"))
 
+	disabledStyle := r.NewStyle().
+		Foreground(lipgloss.Color("255")).
+		Italic(true)
+
+	disabledDescStyle := r.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Italic(true)
+
 	descStyle := r.NewStyle().
 		Foreground(lipgloss.Color("241"))
 
@@ -299,7 +324,7 @@ func (m menuModel) menuView() string {
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1)
 
-	apps := m.visibleApps()
+	items := m.visibleApps()
 
 	var out string
 	if m.isGuest {
@@ -322,16 +347,26 @@ func (m menuModel) menuView() string {
 		out += subtitleStyle.Render("· nick registered!") + "\n"
 	}
 
-	for i, app := range apps {
+	for i, item := range items {
 		cursor := "  "
-		var nameRender string
 		if i == m.cursor {
 			cursor = "> "
-			nameRender = selectedStyle.Render(app.Name)
-		} else {
-			nameRender = normalStyle.Render(app.Name)
 		}
-		desc := descStyle.Render("  " + app.Description)
+		var nameRender, desc string
+		if item.disabled {
+			nameRender = disabledStyle.Render(item.app.Name)
+			descText := "  " + item.app.Description
+			if item.reason != "" {
+				descText += "  [" + item.reason + "]"
+			}
+			desc = disabledDescStyle.Render(descText)
+		} else if i == m.cursor {
+			nameRender = selectedStyle.Render(item.app.Name)
+			desc = descStyle.Render("  " + item.app.Description)
+		} else {
+			nameRender = normalStyle.Render(item.app.Name)
+			desc = descStyle.Render("  " + item.app.Description)
+		}
 		out += cursor + nameRender + "\n" + desc + "\n"
 	}
 
