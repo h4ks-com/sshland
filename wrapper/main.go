@@ -88,17 +88,40 @@ func handleSession(command string, args []string) wish.Middleware {
 
 			cmd.Env = append(os.Environ(), fmt.Sprintf("TERM=%s", ptyReq.Term))
 
-			f, err := pty.Start(cmd)
+			// Open master+slave so we can control echo on the slave before
+			// the process starts. pty.Start only returns the master, which
+			// has no termios on Linux (ENOTTY), so echo control must happen
+			// on the slave fd.
+			ptm, pts, err := pty.Open()
 			if err != nil {
+				_, _ = fmt.Fprintf(sess.Stderr(), "error opening pty: %v\n", err)
+				next(sess)
+				return
+			}
+
+			if dbPassphrase != "" {
+				disableEcho(int(pts.Fd()))
+			}
+
+			cmd.Stdin = pts
+			cmd.Stdout = pts
+			cmd.Stderr = pts
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 1}
+			if err := cmd.Start(); err != nil {
+				_ = ptm.Close()
+				_ = pts.Close()
 				_, _ = fmt.Fprintf(sess.Stderr(), "error starting %s: %v\n", command, err)
 				next(sess)
 				return
 			}
-			defer func() { _ = f.Close() }()
 
 			if dbPassphrase != "" {
-				_, _ = f.Write([]byte(dbPassphrase + "\n"))
+				_, _ = ptm.Write([]byte(dbPassphrase + "\n"))
+				enableEcho(int(pts.Fd()))
 			}
+			_ = pts.Close()
+			f := ptm
+			defer func() { _ = f.Close() }()
 
 			setWinsize(f, ptyReq.Window.Width, ptyReq.Window.Height)
 
