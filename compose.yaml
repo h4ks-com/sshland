@@ -65,9 +65,12 @@ services:
     build:
       context: .
       dockerfile: docker/sshchat/Dockerfile
+    ports:
+      - "${SSHCHAT_PORT:-2022}:2022"
     volumes:
       - sshchat_data:/data
     networks:
+      - default
       - mesh
     restart: always
     security_opt:
