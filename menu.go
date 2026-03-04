@@ -245,19 +245,20 @@ func (m menuModel) loginView() string {
 		Foreground(lipgloss.Color("196")).
 		MarginTop(1)
 
-	// Wrap URL to terminal width so it stays readable on narrow terminals.
-	// avail = width minus 2-space indent and a small right margin.
-	avail := m.width - 4
-	if avail < 40 {
-		avail = 76 // safe fallback before first WindowSizeMsg
+	// Pre-wrap at terminal width so BubbleTea tracks the correct view height.
+	// Without explicit \n, soft-wrap makes BubbleTea undercount lines and
+	// re-render from the wrong position, leaving ghost frames on screen.
+	// The OSC 8 hyperlink on the wrapped display handles click-to-open.
+	// The raw URL is shown below the link as a plain copiable line.
+	lineWidth := m.width
+	if lineWidth < 72 {
+		lineWidth = 72
 	}
 
 	var out string
 	out += titleStyle.Render("Authenticate with Logto") + "\n\n"
 	out += "  Open in browser:\n"
-	// OSC 8 hyperlink: terminal treats the entire display text as one clickable
-	// link to the full URL, even when the display text is visually wrapped.
-	out += "  " + osc8Link(s.url, urlStyle.Render(wrapAt(s.url, avail))) + "\n\n"
+	out += osc8Link(s.url, urlStyle.Render(chunkURL(s.url, lineWidth))) + "\n\n"
 
 	if s.errMsg != "" {
 		out += errStyle.Render("Error: "+s.errMsg) + "\n"
@@ -381,16 +382,17 @@ func osc8Link(url, text string) string {
 	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 }
 
-// wrapAt breaks s into lines of at most width bytes, joining with "\n  " so
-// continuation lines stay indented with the opening line.
-func wrapAt(s string, width int) string {
+// chunkURL breaks s into lines of exactly width bytes with no indent so the
+// full terminal width is used. The explicit \n lets BubbleTea count the view
+// height correctly and avoid ghost frames on re-render.
+func chunkURL(s string, width int) string {
 	if len(s) <= width {
 		return s
 	}
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
 		if i > 0 && i%width == 0 {
-			b.WriteString("\n  ")
+			b.WriteByte('\n')
 		}
 		b.WriteByte(s[i])
 	}
