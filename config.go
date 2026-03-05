@@ -13,7 +13,6 @@ type AppConfig struct {
 	Host         string `yaml:"host"`
 	Port         int    `yaml:"port"`
 	RequiresAuth bool   `yaml:"requires_auth"`
-	EncryptDB    bool   `yaml:"encrypt_db"`
 }
 
 type Config struct {

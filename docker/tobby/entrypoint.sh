@@ -1,6 +1,6 @@
 #!/bin/sh
 exec /usr/local/bin/wrapper /usr/local/bin/tobby \
-    --db "/data/{username}.sqlite" \
+    --db ":memory:" \
     --server "${IRC_SERVER}" \
     --port "${IRC_PORT}" \
     --ssl \
@@ -8,4 +8,5 @@ exec /usr/local/bin/wrapper /usr/local/bin/tobby \
     --setup-if-not-configured \
     --channel "${IRC_CHANNEL}" \
     --restrict-server "${IRC_SERVER}" \
-    --restrict-user "{username}"
+    --restrict-user "{username}" \
+    --do-not-store-password

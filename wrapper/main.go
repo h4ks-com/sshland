@@ -62,20 +62,9 @@ func handleSession(command string, args []string) wish.Middleware {
 			}
 			username := sess.User()
 
-			var dbPassphrase string
-			for _, env := range sess.Environ() {
-				if strings.HasPrefix(env, "SSHLAND_DB_PASS=") {
-					dbPassphrase = strings.TrimPrefix(env, "SSHLAND_DB_PASS=")
-					break
-				}
-			}
-
 			resolved := make([]string, len(args))
 			for i, a := range args {
 				resolved[i] = strings.ReplaceAll(a, "{username}", username)
-			}
-			if dbPassphrase != "" {
-				resolved = append(resolved, "--fd3-enc-key")
 			}
 			cmd := exec.Command(command, resolved...)
 
@@ -87,19 +76,6 @@ func handleSession(command string, args []string) wish.Middleware {
 			}
 
 			cmd.Env = append(os.Environ(), fmt.Sprintf("TERM=%s", ptyReq.Term))
-
-			// Pass the passphrase via an anonymous pipe (fd 3 in the child).
-			// The pipe is never attached to the PTY so there is no echo.
-			// tobby tries fd 3 first and falls back to stdin for older wrappers.
-			if dbPassphrase != "" {
-				pipeR, pipeW, pipeErr := os.Pipe()
-				if pipeErr == nil {
-					_, _ = pipeW.WriteString(dbPassphrase + "\n")
-					_ = pipeW.Close()
-					cmd.ExtraFiles = []*os.File{pipeR}
-					defer func() { _ = pipeR.Close() }()
-				}
-			}
 
 			f, err := pty.Start(cmd)
 			if err != nil {

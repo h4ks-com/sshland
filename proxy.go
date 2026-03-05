@@ -3,18 +3,14 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/pem"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
 
 	cssh "github.com/charmbracelet/ssh"
-	"golang.org/x/crypto/hkdf"
 	gossh "golang.org/x/crypto/ssh"
 )
 
@@ -68,28 +64,6 @@ func getProxySigner() gossh.Signer {
 	return proxySigner
 }
 
-// derivePassphrase signs the user's auth public key with the server's proxy
-// Ed25519 key and derives a 64-char hex passphrase via HKDF.
-// Ed25519 signing is deterministic (RFC 8032), so the same proxy key + same
-// user pubkey always yields the same passphrase across sessions.
-// Returns ("", nil) when no auth public key is present.
-func derivePassphrase(sess cssh.Session) (string, error) {
-	authKey, _ := sess.Context().Value(authPublicKeyKey{}).(gossh.PublicKey)
-	if authKey == nil {
-		return "", nil
-	}
-	sig, err := getProxySigner().Sign(rand.Reader, authKey.Marshal())
-	if err != nil {
-		return "", fmt.Errorf("proxy key sign: %w", err)
-	}
-	r := hkdf.New(sha256.New, sig.Blob, authKey.Marshal(), []byte("sshland-tobby-pass-v2"))
-	key := make([]byte, 32)
-	if _, err := io.ReadFull(r, key); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(key), nil
-}
-
 func Connect(sess cssh.Session, app AppConfig, username string, mux *sshInputMux) error {
 	ptyReq, winCh, isPty := sess.Pty()
 	if !isPty {
@@ -137,17 +111,6 @@ func Connect(sess cssh.Session, app AppConfig, username string, mux *sshInputMux
 	}
 	if err := remote.RequestPty(ptyReq.Term, ptyReq.Window.Height, ptyReq.Window.Width, modes); err != nil {
 		return fmt.Errorf("requesting pty: %w", err)
-	}
-
-	if app.EncryptDB {
-		pass, err := derivePassphrase(sess)
-		if err != nil {
-			log.Printf("proxy: passphrase for %s: %v", username, err)
-		} else if pass != "" {
-			if err := remote.Setenv("SSHLAND_DB_PASS", pass); err != nil {
-				log.Printf("proxy: setenv db pass: %v", err)
-			}
-		}
 	}
 
 	go func() {

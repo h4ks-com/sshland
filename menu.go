@@ -331,15 +331,13 @@ func (m menuModel) menuView() string {
 		if i == m.cursor {
 			cursor = "> "
 		}
-		var nameRender, desc string
+		var nameRender string
 		if i == m.cursor {
 			nameRender = selectedStyle.Render(item.app.Name)
-			desc = descStyle.Render("  " + item.app.Description)
 		} else {
 			nameRender = normalStyle.Render(item.app.Name)
-			desc = descStyle.Render("  " + item.app.Description)
 		}
-		out += cursor + nameRender + "\n" + desc + "\n"
+		out += cursor + nameRender + "\n" + descStyle.Render("  "+item.app.Description) + "\n"
 	}
 
 	out += helpStyle.Render("↑/↓ navigate • enter select • q quit")
