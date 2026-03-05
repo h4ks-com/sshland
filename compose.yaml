@@ -32,6 +32,10 @@ services:
       LOGTO_REDIRECT_URI: "${LOGTO_REDIRECT_URI:-}"
       HTTP_LISTEN_ADDR: "${HTTP_LISTEN_ADDR:-0.0.0.0:8080}"
       IDENTITIES_DIR: "/data/identities"
+    labels:
+      # Without this, Traefik v3 picks an internal-only network IP (mesh/default)
+      # and times out (30s 504). This pins it to the shared external network.
+      - traefik.docker.network=fwwkgcoo0ssoskssow888cww
     networks:
       - default
       - mesh
