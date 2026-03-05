@@ -94,7 +94,7 @@ func (m menuModel) visibleApps() []menuItem {
 		items = append(items, menuItem{app: a})
 	}
 	if m.loginCfg != nil && !m.isGuest {
-		items = append(items, menuItem{app: AppConfig{Name: "logout", Description: "Remove this key's login and sign out"}})
+		items = append(items, menuItem{app: AppConfig{Name: "logout", Description: "We will stop recognizing your ssh key"}})
 	}
 	return items
 }

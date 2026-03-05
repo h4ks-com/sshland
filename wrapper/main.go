@@ -75,7 +75,7 @@ func handleSession(command string, args []string) wish.Middleware {
 				resolved[i] = strings.ReplaceAll(a, "{username}", username)
 			}
 			if dbPassphrase != "" {
-				resolved = append(resolved, "--stdin-enc-key")
+				resolved = append(resolved, "--fd3-enc-key")
 			}
 			cmd := exec.Command(command, resolved...)
 
@@ -88,39 +88,25 @@ func handleSession(command string, args []string) wish.Middleware {
 
 			cmd.Env = append(os.Environ(), fmt.Sprintf("TERM=%s", ptyReq.Term))
 
-			// Open master+slave so we can control echo on the slave before
-			// the process starts. pty.Start only returns the master, which
-			// has no termios on Linux (ENOTTY), so echo control must happen
-			// on the slave fd.
-			ptm, pts, err := pty.Open()
-			if err != nil {
-				_, _ = fmt.Fprintf(sess.Stderr(), "error opening pty: %v\n", err)
-				next(sess)
-				return
-			}
-
+			// Pass the passphrase via an anonymous pipe (fd 3 in the child).
+			// The pipe is never attached to the PTY so there is no echo.
+			// tobby tries fd 3 first and falls back to stdin for older wrappers.
 			if dbPassphrase != "" {
-				disableEcho(int(pts.Fd()))
+				pipeR, pipeW, pipeErr := os.Pipe()
+				if pipeErr == nil {
+					_, _ = pipeW.WriteString(dbPassphrase + "\n")
+					_ = pipeW.Close()
+					cmd.ExtraFiles = []*os.File{pipeR}
+					defer func() { _ = pipeR.Close() }()
+				}
 			}
 
-			cmd.Stdin = pts
-			cmd.Stdout = pts
-			cmd.Stderr = pts
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 1}
-			if err := cmd.Start(); err != nil {
-				_ = ptm.Close()
-				_ = pts.Close()
+			f, err := pty.Start(cmd)
+			if err != nil {
 				_, _ = fmt.Fprintf(sess.Stderr(), "error starting %s: %v\n", command, err)
 				next(sess)
 				return
 			}
-
-			if dbPassphrase != "" {
-				_, _ = ptm.Write([]byte(dbPassphrase + "\n"))
-				enableEcho(int(pts.Fd()))
-			}
-			_ = pts.Close()
-			f := ptm
 			defer func() { _ = f.Close() }()
 
 			setWinsize(f, ptyReq.Window.Width, ptyReq.Window.Height)
