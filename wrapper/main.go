@@ -60,7 +60,14 @@ func handleSession(command string, args []string) wish.Middleware {
 				next(sess)
 				return
 			}
+			// The SSH username may carry an OAuth token encoded as "nick|token".
+			// Extract the token and use only the real nick for path substitution.
 			username := sess.User()
+			oauthToken := ""
+			if idx := strings.Index(username, "|"); idx >= 0 {
+				oauthToken = username[idx+1:]
+				username = username[:idx]
+			}
 
 			resolved := make([]string, len(args))
 			for i, a := range args {
@@ -76,6 +83,9 @@ func handleSession(command string, args []string) wish.Middleware {
 			}
 
 			cmd.Env = append(os.Environ(), fmt.Sprintf("TERM=%s", ptyReq.Term))
+			if oauthToken != "" {
+				cmd.Env = append(cmd.Env, "OAUTH_BEARER_TOKEN="+oauthToken)
+			}
 
 			f, err := pty.Start(cmd)
 			if err != nil {
@@ -139,10 +149,16 @@ func main() {
 			if ctx.Permissions().Extensions == nil {
 				ctx.Permissions().Extensions = make(map[string]string)
 			}
+			// The SSH username may carry an OAuth token encoded as "nick|token".
+			// Extract the real nick before the safety check.
+			user := ctx.User()
+			if idx := strings.Index(user, "|"); idx >= 0 {
+				user = user[:idx]
+			}
 			// Reject usernames that are unsafe for {username} path substitution.
 			// Defense-in-depth: entry-menu only ever sends valid nicks or
 			// guest-XXXXXXXX names, both of which match this pattern.
-			if !safeUsernameRe.MatchString(ctx.User()) {
+			if !safeUsernameRe.MatchString(user) {
 				return false
 			}
 			// Only accept connections from the entry-menu's proxy key.

@@ -123,6 +123,7 @@ type usernameKey struct{}
 type isNewNickKey struct{}
 type isGuestKey struct{}
 type authPublicKeyKey struct{} // gossh.PublicKey stored during public-key auth, used later by the login flow
+type oauthTokenKey struct{}    // OAuth access token injected into app processes that require it
 
 func makePublicKeyHandler(nicksDir string, logtoConfig *LogtoConfig) cssh.Option {
 	return wish.WithPublicKeyAuth(func(ctx cssh.Context, key cssh.PublicKey) bool {
@@ -265,8 +266,9 @@ func makeSessionMiddleware(cfg Config, logtoConfig *LogtoConfig, pendingMgr *Pen
 				if currentUser == "" {
 					currentUser = username
 				}
+				token, _ := sess.Context().Value(oauthTokenKey{}).(string)
 				log.Printf("proxying %s to %s as %s", sess.RemoteAddr(), app.Addr(), currentUser)
-				if err := Connect(sess, app, currentUser, mux); err != nil {
+				if err := Connect(sess, app, currentUser, token, mux); err != nil {
 					_, _ = fmt.Fprintf(sess.Stderr(), "connection error: %v\n", err)
 				}
 				// Loop → menu reappears.

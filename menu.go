@@ -30,18 +30,19 @@ type menuItem struct {
 }
 
 type menuModel struct {
-	apps       []AppConfig
-	cursor     int
-	username   string
-	isNew      bool
-	isGuest    bool
-	sess       cssh.Session
-	renderer   *lipgloss.Renderer
-	loginCfg   *LogtoConfig
-	pendingMgr *PendingAuthManager
-	publicKey  gossh.PublicKey
-	loginState *loginWaitState
-	width      int
+	apps        []AppConfig
+	cursor      int
+	username    string
+	isNew       bool
+	isGuest     bool
+	sess        cssh.Session
+	renderer    *lipgloss.Renderer
+	loginCfg    *LogtoConfig
+	pendingMgr  *PendingAuthManager
+	publicKey   gossh.PublicKey
+	loginState  *loginWaitState
+	width       int
+	tokenForApp *AppConfig // non-nil when OAuth flow was triggered to get a token for an app launch
 }
 
 type keyMap struct {
@@ -140,9 +141,20 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loginState.errMsg = msg.Err.Error()
 			return m, nil
 		}
+		m.loginState = nil
+		if msg.Token != "" {
+			m.sess.Context().SetValue(oauthTokenKey{}, msg.Token)
+		}
+		if m.tokenForApp != nil {
+			// OAuth was triggered to get a token for an app launch, not for login.
+			// Don't change username/isGuest — the user is already authenticated.
+			app := *m.tokenForApp
+			m.tokenForApp = nil
+			m.sess.Context().SetValue(selectedAppKey{}, app)
+			return m, tea.Quit
+		}
 		m.username = msg.Username
 		m.isGuest = false
-		m.loginState = nil
 		// Write the authenticated username into the session context so that
 		// makeAppMiddleware uses the Logto username, not the original SSH username.
 		m.sess.Context().SetValue(usernameKey{}, msg.Username)
@@ -193,6 +205,29 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sess.Context().SetValue(usernameKey{}, sshuserName(m.publicKey))
 					m.sess.Context().SetValue(isGuestKey{}, true)
 					return m, tea.Quit
+				}
+				if selected.RequiresOAuth && m.loginCfg != nil {
+					existingToken, _ := m.sess.Context().Value(oauthTokenKey{}).(string)
+					if existingToken == "" {
+						// Attempt silent refresh before showing the OAuth URL.
+						if m.publicKey != nil {
+							if id, _ := loadIdentity(m.loginCfg.IdentitiesDir, m.publicKey); id != nil && id.RefreshToken != "" {
+								if accessToken, newRefresh, err := m.loginCfg.RefreshAccessToken(id.RefreshToken); err == nil {
+									id.RefreshToken = newRefresh
+									_ = writeIdentity(m.loginCfg.IdentitiesDir, m.publicKey, *id)
+									m.sess.Context().SetValue(oauthTokenKey{}, accessToken)
+									m.sess.Context().SetValue(selectedAppKey{}, selected)
+									return m, tea.Quit
+								}
+								// Refresh failed (expired/revoked) — fall through to OAuth URL.
+							}
+						}
+						state := newRandomState()
+						ch := m.pendingMgr.Register(state, m.publicKey)
+						m.loginState = &loginWaitState{url: m.loginCfg.BuildAuthURL(state)}
+						m.tokenForApp = &selected
+						return m, tea.Batch(waitForAuthCmd(ch), tickCmd(), tea.ClearScreen)
+					}
 				}
 				m.sess.Context().SetValue(selectedAppKey{}, selected)
 			}

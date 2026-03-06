@@ -45,14 +45,14 @@ func (c *LogtoConfig) BuildAuthURL(state string) string {
 	v.Set("response_type", "code")
 	v.Set("client_id", c.AppID)
 	v.Set("redirect_uri", c.RedirectURI)
-	v.Set("scope", "openid profile")
+	v.Set("scope", "openid profile offline_access")
 	v.Set("state", state)
 	return c.Endpoint + "/oidc/auth?" + v.Encode()
 }
 
-// exchangeCodeForUserInfo exchanges an authorization code for the user's sub
-// and username by calling /oidc/token then /oidc/me.
-func (c *LogtoConfig) exchangeCodeForUserInfo(code string) (sub, username string, err error) {
+// exchangeCodeForUserInfo exchanges an authorization code for the user's sub,
+// username, access token, and refresh token by calling /oidc/token then /oidc/me.
+func (c *LogtoConfig) exchangeCodeForUserInfo(code string) (sub, username, accessToken, refreshToken string, err error) {
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
@@ -62,45 +62,46 @@ func (c *LogtoConfig) exchangeCodeForUserInfo(code string) (sub, username string
 
 	resp, err := http.PostForm(c.Endpoint+"/oidc/token", form)
 	if err != nil {
-		return "", "", fmt.Errorf("token request: %w", err)
+		return "", "", "", "", fmt.Errorf("token request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", "", fmt.Errorf("reading token response: %w", err)
+		return "", "", "", "", fmt.Errorf("reading token response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("token endpoint %d: %s", resp.StatusCode, body)
+		return "", "", "", "", fmt.Errorf("token endpoint %d: %s", resp.StatusCode, body)
 	}
 
 	var tokenResp struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		Error        string `json:"error"`
 	}
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return "", "", fmt.Errorf("parsing token response: %w", err)
+		return "", "", "", "", fmt.Errorf("parsing token response: %w", err)
 	}
 	if tokenResp.Error != "" {
-		return "", "", fmt.Errorf("token error: %s", tokenResp.Error)
+		return "", "", "", "", fmt.Errorf("token error: %s", tokenResp.Error)
 	}
 
 	req, err := http.NewRequest(http.MethodGet, c.Endpoint+"/oidc/me", nil)
 	if err != nil {
-		return "", "", fmt.Errorf("building userinfo request: %w", err)
+		return "", "", "", "", fmt.Errorf("building userinfo request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
 
 	meResp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("userinfo request: %w", err)
+		return "", "", "", "", fmt.Errorf("userinfo request: %w", err)
 	}
 	defer func() { _ = meResp.Body.Close() }()
 	meBody, err := io.ReadAll(meResp.Body)
 	if err != nil {
-		return "", "", fmt.Errorf("reading userinfo response: %w", err)
+		return "", "", "", "", fmt.Errorf("reading userinfo response: %w", err)
 	}
 	if meResp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("userinfo endpoint %d: %s", meResp.StatusCode, meBody)
+		return "", "", "", "", fmt.Errorf("userinfo endpoint %d: %s", meResp.StatusCode, meBody)
 	}
 
 	var userInfo struct {
@@ -108,14 +109,52 @@ func (c *LogtoConfig) exchangeCodeForUserInfo(code string) (sub, username string
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal(meBody, &userInfo); err != nil {
-		return "", "", fmt.Errorf("parsing userinfo: %w", err)
+		return "", "", "", "", fmt.Errorf("parsing userinfo: %w", err)
 	}
-	return userInfo.Sub, userInfo.Username, nil
+	return userInfo.Sub, userInfo.Username, tokenResp.AccessToken, tokenResp.RefreshToken, nil
+}
+
+// RefreshAccessToken exchanges a refresh token for a new access token and
+// rotated refresh token. Returns an error if the refresh token is expired or
+// revoked — the caller should fall back to a full OAuth URL flow.
+func (c *LogtoConfig) RefreshAccessToken(refreshToken string) (accessToken, newRefreshToken string, err error) {
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", c.AppID)
+	form.Set("client_secret", c.AppSecret)
+
+	resp, err := http.PostForm(c.Endpoint+"/oidc/token", form)
+	if err != nil {
+		return "", "", fmt.Errorf("refresh token request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", "", fmt.Errorf("reading refresh response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("refresh token endpoint %d: %s", resp.StatusCode, body)
+	}
+
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		Error        string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", "", fmt.Errorf("parsing refresh response: %w", err)
+	}
+	if tokenResp.Error != "" {
+		return "", "", fmt.Errorf("refresh token error: %s", tokenResp.Error)
+	}
+	return tokenResp.AccessToken, tokenResp.RefreshToken, nil
 }
 
 // AuthResult is the outcome of a completed OAuth flow.
 type AuthResult struct {
 	Username string
+	Token    string
 	Err      error
 }
 
@@ -183,22 +222,25 @@ func (m *PendingAuthManager) Complete(state, code string, cfg *LogtoConfig) erro
 		return fmt.Errorf("unknown or expired state")
 	}
 
-	sub, username, err := cfg.exchangeCodeForUserInfo(code)
+	sub, username, token, refreshToken, err := cfg.exchangeCodeForUserInfo(code)
 	if err != nil {
 		pending.ResultCh <- AuthResult{Err: err}
 		return err
 	}
 
-	if err := saveIdentity(cfg.IdentitiesDir, pending.PublicKey, Identity{LogtoSub: sub, Username: username}); err != nil {
+	newID := Identity{LogtoSub: sub, Username: username, RefreshToken: refreshToken}
+	if err := saveIdentity(cfg.IdentitiesDir, pending.PublicKey, newID); err != nil {
 		if os.IsExist(err) {
-			// Race: key was already bound (e.g. two tabs). Load whatever is stored.
+			// Race: key was already bound (e.g. two tabs). Update refresh token and use stored username.
 			id, loadErr := loadIdentity(cfg.IdentitiesDir, pending.PublicKey)
 			if loadErr != nil {
 				pending.ResultCh <- AuthResult{Err: loadErr}
 				return loadErr
 			}
 			if id != nil {
-				pending.ResultCh <- AuthResult{Username: id.Username}
+				id.RefreshToken = refreshToken
+				_ = writeIdentity(cfg.IdentitiesDir, pending.PublicKey, *id)
+				pending.ResultCh <- AuthResult{Username: id.Username, Token: token}
 				return nil
 			}
 		}
@@ -206,7 +248,7 @@ func (m *PendingAuthManager) Complete(state, code string, cfg *LogtoConfig) erro
 		return err
 	}
 
-	pending.ResultCh <- AuthResult{Username: username}
+	pending.ResultCh <- AuthResult{Username: username, Token: token}
 	return nil
 }
 

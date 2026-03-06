@@ -14,8 +14,9 @@ import (
 
 // Identity is stored at /data/identities/{fingerprint} when Logto is enabled.
 type Identity struct {
-	LogtoSub string `json:"logto_sub"`
-	Username string `json:"username"`
+	LogtoSub     string `json:"logto_sub"`
+	Username     string `json:"username"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
 // keyFingerprint returns the first 32 hex chars of the SHA-256 of the key wire bytes.
@@ -60,6 +61,22 @@ func saveIdentity(dir string, key gossh.PublicKey, id Identity) error {
 		return writeErr
 	}
 	return closeErr
+}
+
+// writeIdentity atomically overwrites the identity file for key using a temp
+// file + rename, so concurrent readers never see a partial write.
+func writeIdentity(dir string, key gossh.PublicKey, id Identity) error {
+	fp := keyFingerprint(key)
+	data, err := json.Marshal(id)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, fp)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // deleteIdentity removes the stored identity file for key.

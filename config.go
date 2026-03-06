@@ -8,11 +8,12 @@ import (
 )
 
 type AppConfig struct {
-	Name         string `yaml:"name"`
-	Description  string `yaml:"description"`
-	Host         string `yaml:"host"`
-	Port         int    `yaml:"port"`
-	RequiresAuth bool   `yaml:"requires_auth"`
+	Name          string `yaml:"name"`
+	Description   string `yaml:"description"`
+	Host          string `yaml:"host"`
+	Port          int    `yaml:"port"`
+	RequiresAuth  bool   `yaml:"requires_auth"`
+	RequiresOAuth bool   `yaml:"requires_oauth"`
 }
 
 type Config struct {

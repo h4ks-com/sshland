@@ -64,14 +64,22 @@ func getProxySigner() gossh.Signer {
 	return proxySigner
 }
 
-func Connect(sess cssh.Session, app AppConfig, username string, mux *sshInputMux) error {
+func Connect(sess cssh.Session, app AppConfig, username, token string, mux *sshInputMux) error {
 	ptyReq, winCh, isPty := sess.Pty()
 	if !isPty {
 		return fmt.Errorf("no PTY requested")
 	}
 
+	// Encode the OAuth token into the SSH username as "username|token" so the
+	// wrapper can extract it without relying on SSH env channel requests, which
+	// some server implementations handle inconsistently.
+	sshUser := username
+	if token != "" {
+		sshUser = username + "|" + token
+	}
+
 	cfg := &gossh.ClientConfig{
-		User: username,
+		User: sshUser,
 		Auth: []gossh.AuthMethod{
 			gossh.PublicKeys(getProxySigner()),
 		},
