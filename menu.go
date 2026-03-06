@@ -114,9 +114,9 @@ func tickCmd() tea.Cmd {
 
 func (m menuModel) Init() tea.Cmd {
 	if m.loginState != nil {
-		return tickCmd()
+		return tea.Batch(tea.ClearScreen, tickCmd())
 	}
-	return nil
+	return tea.ClearScreen
 }
 
 func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

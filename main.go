@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -269,7 +270,12 @@ func makeSessionMiddleware(cfg Config, logtoConfig *LogtoConfig, pendingMgr *Pen
 				token, _ := sess.Context().Value(oauthTokenKey{}).(string)
 				log.Printf("proxying %s to %s as %s", sess.RemoteAddr(), app.Addr(), currentUser)
 				if err := Connect(sess, app, currentUser, token, mux); err != nil {
-					_, _ = fmt.Fprintf(sess.Stderr(), "connection error: %v\n", err)
+					// ExitMissingError means the remote sent no exit-status/exit-signal
+					// (common in sshchat and similar servers). Not worth surfacing to the user.
+					var exitMissing *gossh.ExitMissingError
+					if !errors.As(err, &exitMissing) {
+						_, _ = fmt.Fprintf(sess.Stderr(), "connection error: %v\n", err)
+					}
 				}
 				// Loop → menu reappears.
 			}

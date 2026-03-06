@@ -74,7 +74,7 @@ func Connect(sess cssh.Session, app AppConfig, username, token string, mux *sshI
 	// wrapper can extract it without relying on SSH env channel requests, which
 	// some server implementations handle inconsistently.
 	sshUser := username
-	if token != "" {
+	if app.RequiresOAuth && token != "" {
 		sshUser = username + "|" + token
 	}
 
