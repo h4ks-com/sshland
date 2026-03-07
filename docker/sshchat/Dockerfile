@@ -5,9 +5,8 @@ WORKDIR /app
 # Pinned to a specific commit for supply-chain safety.
 # To update: git ls-remote https://github.com/shazow/ssh-chat HEAD
 RUN apk add --no-cache git && \
-    git clone https://github.com/shazow/ssh-chat.git && \
+    git clone https://github.com/h4ks-com/ssh-chat.git && \
     cd ssh-chat && \
-    git checkout 844e5d5b2675eb011a37ff36d02d0583a371fa29 && \
     go build -o ssh-chat ./cmd/ssh-chat
 
 FROM alpine:3.21

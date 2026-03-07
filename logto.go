@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,6 +47,7 @@ func (c *LogtoConfig) BuildAuthURL(state string) string {
 	v.Set("client_id", c.AppID)
 	v.Set("redirect_uri", c.RedirectURI)
 	v.Set("scope", "openid profile offline_access")
+	v.Set("prompt", "consent")
 	v.Set("state", state)
 	return c.Endpoint + "/oidc/auth?" + v.Encode()
 }
@@ -227,6 +229,7 @@ func (m *PendingAuthManager) Complete(state, code string, cfg *LogtoConfig) erro
 		pending.ResultCh <- AuthResult{Err: err}
 		return err
 	}
+	log.Printf("oauth complete: sub=%s username=%s got_refresh_token=%v", sub, username, refreshToken != "")
 
 	newID := Identity{LogtoSub: sub, Username: username, RefreshToken: refreshToken}
 	if err := saveIdentity(cfg.IdentitiesDir, pending.PublicKey, newID); err != nil {
