@@ -8,6 +8,8 @@ volumes:
   hanb_data:
   tobby_data:
   proxy_key: {}
+  wordle_data:
+  asshteroids_data:
 
 services:
   entry-menu:
@@ -53,6 +55,8 @@ services:
     build:
       context: .
       dockerfile: docker/wordle/Dockerfile
+    volumes:
+      - wordle_data:/app/sshwordle/app
     networks:
       - mesh
     restart: always
@@ -144,6 +148,11 @@ services:
     build:
       context: .
       dockerfile: docker/asshteroids/Dockerfile
+    environment:
+      SSH_HOST_KEY: /var/lib/asshteroids/host_key
+    volumes:
+      - asshteroids_data:/var/lib/asshteroids
+    read_only: true
     networks:
       - mesh
     restart: always
@@ -160,6 +169,9 @@ services:
     build:
       context: .
       dockerfile: docker/sshtron/Dockerfile
+    tmpfs:
+      - /tmp
+    read_only: true
     networks:
       - mesh
     restart: always

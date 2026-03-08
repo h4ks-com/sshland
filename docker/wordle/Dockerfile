@@ -20,7 +20,8 @@ RUN apk add --no-cache ca-certificates && \
 # Copy the whole repo directory so runtime word-list files are present alongside the binary
 COPY --from=builder /app/sshwordle/ /app/sshwordle/
 
-RUN chown -R sshland:sshland /app
+RUN chown -R sshland:sshland /app && \
+    mkdir -p /app/sshwordle/app && chown sshland:sshland /app/sshwordle/app
 
 ENV HOME=/home/sshland
 
