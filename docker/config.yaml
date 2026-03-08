@@ -20,3 +20,23 @@ apps:
     description: "Wordle word game"
     host: "wordle"
     port: 1337
+    group: "games"
+
+  - name: "asshteroids"
+    description: "Multiplayer Asteroids"
+    host: "asshteroids"
+    port: 2222
+    group: "games"
+
+  - name: "sshtron"
+    description: "Multiplayer Tron"
+    host: "sshtron"
+    port: 2022
+    group: "games"
+
+  - name: "netris"
+    description: "Multiplayer Tetris"
+    host: "playnetris.com"
+    port: 22
+    group: "games"
+    external: true

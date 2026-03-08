@@ -139,3 +139,35 @@ services:
           memory: 256m
           cpus: "0.5"
           pids: 100
+
+  asshteroids:
+    build:
+      context: .
+      dockerfile: docker/asshteroids/Dockerfile
+    networks:
+      - mesh
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.1"
+          pids: 50
+
+  sshtron:
+    build:
+      context: .
+      dockerfile: docker/sshtron/Dockerfile
+    networks:
+      - mesh
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.1"
+          pids: 50

@@ -32,6 +32,7 @@ type menuItem struct {
 type menuModel struct {
 	apps        []AppConfig
 	cursor      int
+	subMenu     string // "" = main menu, "games" = games submenu
 	username    string
 	isNew       bool
 	isGuest     bool
@@ -50,6 +51,7 @@ type keyMap struct {
 	Down  key.Binding
 	Enter key.Binding
 	Quit  key.Binding
+	Esc   key.Binding
 }
 
 var keys = keyMap{
@@ -64,6 +66,9 @@ var keys = keyMap{
 	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
+	),
+	Esc: key.NewBinding(
+		key.WithKeys("esc"),
 	),
 }
 
@@ -81,9 +86,21 @@ func newMenuModel(apps []AppConfig, username string, isNew, isGuest bool, sess c
 	}
 }
 
-// visibleApps filters auth-required apps for guests and prepends login /
-// appends logout when Logto is configured.
+// visibleApps returns menu items for the current submenu state.
+// Main menu: injects "games ▸" before logout, excludes group=="games" apps.
+// Games submenu: injects "‹ back" first, includes only group=="games" apps.
 func (m menuModel) visibleApps() []menuItem {
+	if m.subMenu == "games" {
+		var items []menuItem
+		items = append(items, menuItem{app: AppConfig{Name: "back", Description: "Back to main menu"}})
+		for _, a := range m.apps {
+			if a.Group == "games" {
+				items = append(items, menuItem{app: a})
+			}
+		}
+		return items
+	}
+
 	var items []menuItem
 	if m.loginCfg != nil && m.isGuest {
 		items = append(items, menuItem{app: AppConfig{Name: "login", Description: "Authenticate to claim your nick"}})
@@ -92,8 +109,12 @@ func (m menuModel) visibleApps() []menuItem {
 		if a.RequiresAuth && m.isGuest {
 			continue
 		}
+		if a.Group == "games" {
+			continue
+		}
 		items = append(items, menuItem{app: a})
 	}
+	items = append(items, menuItem{app: AppConfig{Name: "games", Description: "Play something fun"}})
 	if m.loginCfg != nil && !m.isGuest {
 		items = append(items, menuItem{app: AppConfig{Name: "logout", Description: "We will stop recognizing your ssh key"}})
 	}
@@ -175,6 +196,13 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
 
+		case key.Matches(msg, keys.Esc):
+			if m.subMenu != "" {
+				m.subMenu = ""
+				m.cursor = 0
+				return m, tea.ClearScreen
+			}
+
 		case key.Matches(msg, keys.Up):
 			if m.cursor > 0 {
 				m.cursor--
@@ -190,6 +218,16 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items := m.visibleApps()
 			if len(items) > 0 {
 				selected := items[m.cursor].app
+				if selected.Name == "games" {
+					m.subMenu = "games"
+					m.cursor = 0
+					return m, tea.ClearScreen
+				}
+				if selected.Name == "back" {
+					m.subMenu = ""
+					m.cursor = 0
+					return m, tea.ClearScreen
+				}
 				if selected.Name == "login" {
 					state := newRandomState()
 					ch := m.pendingMgr.Register(state, m.publicKey)
@@ -334,6 +372,9 @@ func (m menuModel) menuView() string {
 	descStyle := r.NewStyle().
 		Foreground(lipgloss.Color("241"))
 
+	externalStyle := r.NewStyle().
+		Foreground(lipgloss.Color("214"))
+
 	helpStyle := r.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		MarginTop(1)
@@ -366,16 +407,36 @@ func (m menuModel) menuView() string {
 		if i == m.cursor {
 			cursor = "> "
 		}
+
+		var displayName string
+		switch item.app.Name {
+		case "games":
+			displayName = "games ▸"
+		case "back":
+			displayName = "‹ back"
+		default:
+			displayName = item.app.Name
+		}
+
 		var nameRender string
 		if i == m.cursor {
-			nameRender = selectedStyle.Render(item.app.Name)
+			nameRender = selectedStyle.Render(displayName)
 		} else {
-			nameRender = normalStyle.Render(item.app.Name)
+			nameRender = normalStyle.Render(displayName)
 		}
+
+		if item.app.External {
+			nameRender += " " + externalStyle.Render("(external)")
+		}
+
 		out += cursor + nameRender + "\n" + descStyle.Render("  "+item.app.Description) + "\n"
 	}
 
-	out += helpStyle.Render("↑/↓ navigate • enter select • q quit")
+	helpText := "↑/↓ navigate • enter select • q quit"
+	if m.subMenu != "" {
+		helpText = "↑/↓ navigate • enter select • esc back • q quit"
+	}
+	out += helpStyle.Render(helpText)
 	return out
 }
 

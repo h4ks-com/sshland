@@ -14,6 +14,8 @@ type AppConfig struct {
 	Port          int    `yaml:"port"`
 	RequiresAuth  bool   `yaml:"requires_auth"`
 	RequiresOAuth bool   `yaml:"requires_oauth"`
+	Group         string `yaml:"group,omitempty"`
+	External      bool   `yaml:"external,omitempty"`
 }
 
 type Config struct {
