@@ -150,6 +150,7 @@ services:
       dockerfile: docker/asshteroids/Dockerfile
     environment:
       SSH_HOST_KEY: /var/lib/asshteroids/host_key
+      SSH_PORT: "2222"
     volumes:
       - asshteroids_data:/var/lib/asshteroids
     read_only: true
@@ -169,6 +170,8 @@ services:
     build:
       context: .
       dockerfile: docker/sshtron/Dockerfile
+    environment:
+      SSH_PORT: "2022"
     tmpfs:
       - /tmp
     read_only: true
