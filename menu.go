@@ -26,7 +26,8 @@ type loginWaitState struct {
 var spinnerFrames = []string{"◌", "◍", "◎", "●", "◎", "◍"}
 
 type menuItem struct {
-	app AppConfig
+	app      AppConfig
+	disabled bool
 }
 
 type menuModel struct {
@@ -103,7 +104,14 @@ func (m menuModel) visibleApps() []menuItem {
 
 	var items []menuItem
 	if m.loginCfg != nil && m.isGuest {
-		items = append(items, menuItem{app: AppConfig{Name: "login", Description: "Authenticate to claim your nick"}})
+		if m.publicKey != nil {
+			items = append(items, menuItem{app: AppConfig{Name: "login", Description: "Authenticate to claim your nick"}})
+		} else {
+			items = append(items, menuItem{
+				app:      AppConfig{Name: "login", Description: "run ssh-keygen first to get a key"},
+				disabled: true,
+			})
+		}
 	}
 	for _, a := range m.apps {
 		if a.RequiresAuth && m.isGuest {
@@ -216,7 +224,7 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.Enter):
 			items := m.visibleApps()
-			if len(items) > 0 {
+			if len(items) > 0 && !items[m.cursor].disabled {
 				selected := items[m.cursor].app
 				if selected.Name == "games" {
 					m.subMenu = "games"
@@ -369,6 +377,9 @@ func (m menuModel) menuView() string {
 	normalStyle := r.NewStyle().
 		Foreground(lipgloss.Color("252"))
 
+	disabledStyle := r.NewStyle().
+		Foreground(lipgloss.Color("238"))
+
 	descStyle := r.NewStyle().
 		Foreground(lipgloss.Color("241"))
 
@@ -403,11 +414,6 @@ func (m menuModel) menuView() string {
 	}
 
 	for i, item := range items {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
-		}
-
 		var displayName string
 		switch item.app.Name {
 		case "games":
@@ -418,10 +424,16 @@ func (m menuModel) menuView() string {
 			displayName = item.app.Name
 		}
 
-		var nameRender string
-		if i == m.cursor {
+		var cursor, nameRender string
+		switch {
+		case item.disabled:
+			cursor = "  "
+			nameRender = disabledStyle.Render(displayName)
+		case i == m.cursor:
+			cursor = "> "
 			nameRender = selectedStyle.Render(displayName)
-		} else {
+		default:
+			cursor = "  "
 			nameRender = normalStyle.Render(displayName)
 		}
 

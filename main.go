@@ -326,6 +326,17 @@ func main() {
 		wish.WithPasswordAuth(func(_ cssh.Context, _ string) bool {
 			return false // no password auth
 		}),
+		// Keyboard-interactive accepts users who have no SSH key at all,
+		// letting them in as guests. Clients with keys go through the public
+		// key handler above and never reach this path.
+		cssh.KeyboardInteractiveAuth(func(ctx cssh.Context, _ gossh.KeyboardInteractiveChallenge) bool {
+			if ctx.Permissions().Extensions == nil {
+				ctx.Permissions().Extensions = make(map[string]string)
+			}
+			ctx.SetValue(usernameKey{}, guestName(ctx))
+			ctx.SetValue(isGuestKey{}, true)
+			return true
+		}),
 		wish.WithIdleTimeout(10*time.Minute),
 		wish.WithMiddleware(
 			makeSessionMiddleware(cfg, logtoConfig, pendingMgr),
