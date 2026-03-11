@@ -33,7 +33,7 @@ type menuItem struct {
 type menuModel struct {
 	apps        []AppConfig
 	cursor      int
-	subMenu     string // "" = main menu, "games" = games submenu
+	subMenu     string // "" = main menu, "games" = games submenu, "movies" = movies submenu
 	username    string
 	isNew       bool
 	isGuest     bool
@@ -88,14 +88,26 @@ func newMenuModel(apps []AppConfig, username string, isNew, isGuest bool, sess c
 }
 
 // visibleApps returns menu items for the current submenu state.
-// Main menu: injects "games ▸" before logout, excludes group=="games" apps.
+// Main menu: injects "games ▸" and "movies ▸" before logout, excludes grouped apps.
 // Games submenu: injects "‹ back" first, includes only group=="games" apps.
+// Movies submenu: injects "‹ back" first, includes only group=="movies" apps.
 func (m menuModel) visibleApps() []menuItem {
 	if m.subMenu == "games" {
 		var items []menuItem
 		items = append(items, menuItem{app: AppConfig{Name: "back", Description: "Back to main menu"}})
 		for _, a := range m.apps {
 			if a.Group == "games" {
+				items = append(items, menuItem{app: a})
+			}
+		}
+		return items
+	}
+
+	if m.subMenu == "movies" {
+		var items []menuItem
+		items = append(items, menuItem{app: AppConfig{Name: "back", Description: "Back to main menu"}})
+		for _, a := range m.apps {
+			if a.Group == "movies" {
 				items = append(items, menuItem{app: a})
 			}
 		}
@@ -117,12 +129,13 @@ func (m menuModel) visibleApps() []menuItem {
 		if a.RequiresAuth && m.isGuest {
 			continue
 		}
-		if a.Group == "games" {
+		if a.Group == "games" || a.Group == "movies" {
 			continue
 		}
 		items = append(items, menuItem{app: a})
 	}
 	items = append(items, menuItem{app: AppConfig{Name: "games", Description: "Play something fun"}})
+	items = append(items, menuItem{app: AppConfig{Name: "movies", Description: "Watch ASCII animations"}})
 	if m.loginCfg != nil && !m.isGuest {
 		items = append(items, menuItem{app: AppConfig{Name: "logout", Description: "We will stop recognizing your ssh key"}})
 	}
@@ -228,6 +241,11 @@ func (m menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				selected := items[m.cursor].app
 				if selected.Name == "games" {
 					m.subMenu = "games"
+					m.cursor = 0
+					return m, tea.ClearScreen
+				}
+				if selected.Name == "movies" {
+					m.subMenu = "movies"
 					m.cursor = 0
 					return m, tea.ClearScreen
 				}
@@ -418,6 +436,8 @@ func (m menuModel) menuView() string {
 		switch item.app.Name {
 		case "games":
 			displayName = "games ▸"
+		case "movies":
+			displayName = "movies ▸"
 		case "back":
 			displayName = "‹ back"
 		default:

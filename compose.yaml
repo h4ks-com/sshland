@@ -186,3 +186,27 @@ services:
           memory: 64m
           cpus: "0.1"
           pids: 50
+
+  movies:
+    build:
+      context: .
+      dockerfile: docker/movies/Dockerfile
+    environment:
+      PROXY_KEY_PATH: /proxy_key/key
+    volumes:
+      - proxy_key:/proxy_key:ro
+      - ./movies/bad_apple.txt:/movies/bad_apple.txt:ro
+    tmpfs:
+      - /tmp
+    read_only: true
+    networks:
+      - mesh
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 224m
+          cpus: "0.25"
+          pids: 160

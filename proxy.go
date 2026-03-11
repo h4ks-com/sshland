@@ -117,13 +117,13 @@ func Connect(sess cssh.Session, app AppConfig, username, token string, mux *sshI
 		gossh.TTY_OP_ISPEED: 14400,
 		gossh.TTY_OP_OSPEED: 14400,
 	}
-	if err := remote.RequestPty(ptyReq.Term, ptyReq.Window.Height, ptyReq.Window.Width, modes); err != nil {
+	if err := requestPtyWithPixels(remote, ptyReq, modes); err != nil {
 		return fmt.Errorf("requesting pty: %w", err)
 	}
 
 	go func() {
 		for w := range winCh {
-			_ = remote.WindowChange(w.Height, w.Width)
+			_ = windowChangeWithPixels(remote, w)
 		}
 	}()
 
@@ -151,5 +151,59 @@ func Connect(sess cssh.Session, app AppConfig, username, token string, mux *sshI
 
 	err = remote.Wait()
 	close(done) // stops the stdin goroutine without consuming from mux.ch
+	return err
+}
+
+// requestPtyWithPixels sends a pty-req forwarding the real pixel dimensions from
+// the outer SSH client. gossh.Session.RequestPty fills pixel dims as cols×8/rows×8
+// (implying 1:1 char ratio); forwarding the actual values lets downstream processes
+// (e.g. donut) compute the correct character aspect ratio.
+func requestPtyWithPixels(remote *gossh.Session, ptyReq cssh.Pty, modes gossh.TerminalModes) error {
+	// Encode terminal modes: opcode(1 byte) + value(4 bytes big-endian) per entry.
+	tm := make([]byte, 0, len(modes)*5+1)
+	for k, v := range modes {
+		tm = append(tm, k, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
+	}
+	tm = append(tm, 0) // TTY_OP_END
+
+	type msg struct {
+		Term     string
+		Columns  uint32
+		Rows     uint32
+		Width    uint32
+		Height   uint32
+		Modelist string
+	}
+	ok, err := remote.SendRequest("pty-req", true, gossh.Marshal(msg{
+		Term:     ptyReq.Term,
+		Columns:  uint32(ptyReq.Window.Width),
+		Rows:     uint32(ptyReq.Window.Height),
+		Width:    uint32(ptyReq.Window.WidthPixels),
+		Height:   uint32(ptyReq.Window.HeightPixels),
+		Modelist: string(tm),
+	}))
+	if err != nil {
+		return fmt.Errorf("pty-req: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("pty-req refused")
+	}
+	return nil
+}
+
+// windowChangeWithPixels sends a window-change request including pixel dimensions.
+func windowChangeWithPixels(remote *gossh.Session, w cssh.Window) error {
+	type msg struct {
+		Columns uint32
+		Rows    uint32
+		Width   uint32
+		Height  uint32
+	}
+	_, err := remote.SendRequest("window-change", false, gossh.Marshal(msg{
+		Columns: uint32(w.Width),
+		Rows:    uint32(w.Height),
+		Width:   uint32(w.WidthPixels),
+		Height:  uint32(w.HeightPixels),
+	}))
 	return err
 }

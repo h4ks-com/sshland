@@ -61,21 +61,24 @@ func TestMain(m *testing.M) {
 		log.Fatalf("signer: %v", err)
 	}
 
-	if *flagRunStack {
-		dataDir, err := os.MkdirTemp("", "sshland-e2e-*")
-		if err != nil {
-			log.Fatalf("tempdir: %v", err)
+	code := func() int {
+		if *flagRunStack {
+			dataDir, err := os.MkdirTemp("", "sshland-e2e-*")
+			if err != nil {
+				log.Fatalf("tempdir: %v", err)
+			}
+			defer func() { _ = os.RemoveAll(dataDir) }()
+			startStack(port, dataDir)
+			defer stopStack(port, dataDir)
 		}
-		defer func() { _ = os.RemoveAll(dataDir) }()
-		startStack(port, dataDir)
-		defer stopStack(port, dataDir)
-	}
 
-	if !dialWait(testAddr, 30*time.Second) {
-		log.Fatalf("timed out waiting for SSH at %s", testAddr)
-	}
+		if !dialWait(testAddr, 30*time.Second) {
+			log.Fatalf("timed out waiting for SSH at %s", testAddr)
+		}
 
-	os.Exit(m.Run())
+		return m.Run()
+	}()
+	os.Exit(code)
 }
 
 // ---------- stack lifecycle ----------
@@ -179,6 +182,11 @@ func (b *outBuf) respondToQueries(raw string) {
 	if strings.Contains(raw, "\x1b]11;?") {
 		_, _ = b.stdin.Write([]byte("\x1b]11;rgb:0000/0000/0000\a"))
 	}
+	// DSR (Device Status Report \x1b[6n) — server asks "where is the cursor?"
+	// ascii-movie sends this at startup; respond with cursor at row 1, col 1.
+	if strings.Contains(raw, "\x1b[6n") {
+		_, _ = b.stdin.Write([]byte("\x1b[1;1R"))
+	}
 	// XTVERSION / kitty keyboard protocol query — respond with a DCS version string.
 	if strings.Contains(raw, "\x1b[>0q") {
 		_, _ = b.stdin.Write([]byte("\x1bP>|test(0)\x1b\\"))
@@ -199,6 +207,26 @@ func (b *outBuf) waitFor(want string, d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
 		if strings.Contains(b.text(), want) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// waitForBytes waits until at least minBytes new bytes have been written to the
+// buffer (past the current length at call time) within duration d. This verifies
+// that an animation is actually streaming output, not just silently failing.
+func (b *outBuf) waitForBytes(minBytes int, d time.Duration) bool {
+	b.mu.Lock()
+	start := b.buf.Len()
+	b.mu.Unlock()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		b.mu.Lock()
+		cur := b.buf.Len()
+		b.mu.Unlock()
+		if cur-start >= minBytes {
 			return true
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -316,9 +344,11 @@ func TestMenuDisplayed(t *testing.T) {
 	if !out.waitFor("sshland", 5*time.Second) {
 		t.Fatalf("menu never appeared:\n%s", out.text())
 	}
-	for _, app := range menuOrder {
-		if !out.waitFor(app, 2*time.Second) {
-			t.Errorf("app %q missing from menu:\n%s", app, out.text())
+	// Check items that are directly visible in the main menu.
+	// "wordle" lives inside the games submenu and never appears in the main menu.
+	for _, item := range []string{"chat", "hanb", "games", "movies"} {
+		if !out.waitFor(item, 2*time.Second) {
+			t.Errorf("item %q missing from main menu:\n%s", item, out.text())
 		}
 	}
 }
@@ -362,4 +392,152 @@ func TestTobby(t *testing.T) {
 		t.Skip("tobby not visible (requires auth, running as guest)")
 	}
 	t.Fatal("tobby unexpectedly visible to guest")
+}
+
+// ---------- Movies helpers ----------
+
+// moviesSubmenuOrder is the display order inside the movies submenu (after "‹ back").
+var moviesSubmenuOrder = []string{"starwars", "Never gonna give you up", "bad apple", "nyancat", "donut", "bonsai", "fire", "life"}
+
+// openMoviesSubmenu navigates from the main menu into the movies submenu and
+// confirms that the submenu rendered by waiting for "starwars" to appear.
+func openMoviesSubmenu(t *testing.T, stdin io.Writer, out *outBuf) {
+	t.Helper()
+	if !out.waitFor("sshland", 5*time.Second) {
+		t.Fatalf("menu did not appear; output:\n%s", out.text())
+	}
+	// Main menu order: chat(0) hanb(1) games ▸(2) movies ▸(3)
+	// When Logto prepends a "login" item the index shifts by 1.
+	moviesIdx := 3
+	if strings.Contains(out.text(), "Authenticate to claim your nick") {
+		moviesIdx++
+	}
+	for i := 0; i < moviesIdx; i++ {
+		_, _ = stdin.Write([]byte("j"))
+		time.Sleep(50 * time.Millisecond)
+	}
+	_, _ = stdin.Write([]byte("\r"))
+	if !out.waitFor("starwars", 3*time.Second) {
+		t.Fatalf("movies submenu did not appear; output:\n%s", out.text())
+	}
+}
+
+// selectMovieApp opens the movies submenu then navigates to and selects the
+// named movie (starwars | nyancat | donut | bonsai).
+func selectMovieApp(t *testing.T, stdin io.Writer, out *outBuf, name string) {
+	t.Helper()
+	openMoviesSubmenu(t, stdin, out)
+	idx := -1
+	for i, n := range moviesSubmenuOrder {
+		if n == name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("unknown movie %q", name)
+	}
+	// Position 0 in the movies submenu is "‹ back"; movies start at 1.
+	// Press j (idx+1) times to land on the target movie.
+	for i := 0; i <= idx; i++ {
+		_, _ = stdin.Write([]byte("j"))
+		time.Sleep(50 * time.Millisecond)
+	}
+	_, _ = stdin.Write([]byte("\r"))
+}
+
+// ---------- Movies tests ----------
+
+func TestMoviesSubmenuVisible(t *testing.T) {
+	_, out, _ := ptySession(t, sshClient(t))
+	if !out.waitFor("movies", 5*time.Second) {
+		t.Fatalf("'movies' not found in main menu:\n%s", out.text())
+	}
+}
+
+func TestMoviesSubmenuContents(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	openMoviesSubmenu(t, stdin, out)
+	for _, movie := range moviesSubmenuOrder {
+		if !strings.Contains(out.text(), movie) {
+			t.Errorf("movie %q missing from submenu:\n%s", movie, out.text())
+		}
+	}
+}
+
+func TestMoviesEsc(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	openMoviesSubmenu(t, stdin, out)
+	_, _ = stdin.Write([]byte("\x1b"))
+	// After ESC the main menu reappears. "games" is present in both the
+	// pre-nav accumulated text and the re-rendered main menu, so this
+	// confirms we're back (BubbleTea re-rendered) without a crash.
+	if !out.waitFor("games", 3*time.Second) {
+		t.Fatalf("main menu did not reappear after ESC:\n%s", out.text())
+	}
+}
+
+func TestMoviesStarwars(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	selectMovieApp(t, stdin, out, "starwars")
+	// Verify the animation is actually streaming — not just connecting and crashing.
+	if !out.waitForBytes(500, 5*time.Second) {
+		t.Fatalf("starwars: animation produced no output:\n%s", out.text())
+	}
+}
+
+func TestMoviesNyancat(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	selectMovieApp(t, stdin, out, "nyancat")
+	if !out.waitForBytes(500, 3*time.Second) {
+		t.Fatalf("nyancat: animation produced no output:\n%s", out.text())
+	}
+}
+
+func TestMoviesDonut(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	selectMovieApp(t, stdin, out, "donut")
+	if !out.waitForBytes(500, 3*time.Second) {
+		t.Fatalf("donut: animation produced no output:\n%s", out.text())
+	}
+}
+
+func TestMoviesBonsai(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	selectMovieApp(t, stdin, out, "bonsai")
+	if !out.waitForBytes(500, 3*time.Second) {
+		t.Fatalf("bonsai: animation produced no output:\n%s", out.text())
+	}
+}
+
+func TestMoviesFire(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	selectMovieApp(t, stdin, out, "fire")
+	if !out.waitForBytes(500, 3*time.Second) {
+		t.Fatalf("fire: animation produced no output:\n%s", out.text())
+	}
+}
+
+func TestMoviesLife(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	selectMovieApp(t, stdin, out, "life")
+	if !out.waitForBytes(500, 3*time.Second) {
+		t.Fatalf("life: animation produced no output:\n%s", out.text())
+	}
+}
+
+func TestMoviesRickRoll(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	selectMovieApp(t, stdin, out, "Never gonna give you up")
+	if !out.waitForBytes(500, 5*time.Second) {
+		t.Fatalf("Never gonna give you up: animation produced no output:\n%s", out.text())
+	}
+}
+
+func TestMoviesBadApple(t *testing.T) {
+	stdin, out, _ := ptySession(t, sshClient(t))
+	selectMovieApp(t, stdin, out, "bad apple")
+	if !out.waitForBytes(500, 5*time.Second) {
+		t.Fatalf("bad apple: animation produced no output:\n%s", out.text())
+	}
 }

@@ -40,3 +40,51 @@ apps:
     port: 22
     group: "games"
     external: true
+
+  - name: "starwars"
+    description: "ASCII Star Wars Episode IV"
+    host: "movies"
+    port: 2222
+    group: "movies"
+
+  - name: "Never gonna give you up"
+    description: "Never gonna let you down"
+    host: "movies"
+    port: 2228
+    group: "movies"
+
+  - name: "bad apple"
+    description: "Bad Apple!! (Touhou)"
+    host: "movies"
+    port: 2229
+    group: "movies"
+
+  - name: "nyancat"
+    description: "Nyan Cat (infinite loop)"
+    host: "movies"
+    port: 2223
+    group: "movies"
+
+  - name: "donut"
+    description: "Spinning 3D ASCII torus"
+    host: "movies"
+    port: 2224
+    group: "movies"
+
+  - name: "bonsai"
+    description: "Growing bonsai tree"
+    host: "movies"
+    port: 2225
+    group: "movies"
+
+  - name: "fire"
+    description: "ASCII fire animation"
+    host: "movies"
+    port: 2226
+    group: "movies"
+
+  - name: "life"
+    description: "Conway's Game of Life"
+    host: "movies"
+    port: 2227
+    group: "movies"
