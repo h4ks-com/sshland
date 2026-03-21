@@ -2,6 +2,7 @@ networks:
   mesh:
     internal: true
   tobby-egress: {}
+  h4kmally-egress: {}
 
 volumes:
   sshchat_data:
@@ -50,6 +51,32 @@ services:
           memory: 256m
           cpus: "0.5"
           pids: 200
+
+  h4kmally:
+    build:
+      context: .
+      dockerfile: docker/h4kmally/Dockerfile
+    environment:
+      SSH_HOST_KEY_PATH: /tmp/sshland/host_key
+      SSH_LISTEN_ADDR: "0.0.0.0:2222"
+      PROXY_KEY_PATH: /proxy_key/key
+    volumes:
+      - proxy_key:/proxy_key:ro
+    tmpfs:
+      - /tmp
+    read_only: true
+    networks:
+      - mesh
+      - h4kmally-egress
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
+          pids: 100
 
   wordle:
     build:

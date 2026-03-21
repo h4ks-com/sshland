@@ -16,6 +16,12 @@ apps:
     host: "hanb"
     port: 2222
 
+  - name: "h4kmally"
+    description: "agar.io in your terminal — eat and grow!"
+    host: "h4kmally"
+    port: 2222
+    group: "games"
+
   - name: "wordle"
     description: "Wordle word game"
     host: "wordle"
