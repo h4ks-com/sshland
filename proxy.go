@@ -73,8 +73,12 @@ func Connect(sess cssh.Session, app AppConfig, username, token string, mux *sshI
 	// Encode the OAuth token into the SSH username as "username|token" so the
 	// wrapper can extract it without relying on SSH env channel requests, which
 	// some server implementations handle inconsistently.
+	//
+	// We pass the token whenever we have one — apps that don't need it ignore
+	// the OAUTH_BEARER_TOKEN env var the wrapper sets. This lets the shop
+	// optionally identify logged-in users without requiring login.
 	sshUser := username
-	if app.RequiresOAuth && token != "" {
+	if token != "" {
 		sshUser = username + "|" + token
 	}
 

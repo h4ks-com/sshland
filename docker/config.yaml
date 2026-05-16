@@ -11,6 +11,11 @@ apps:
     requires_auth: true
     requires_oauth: true
 
+  - name: "shop"
+    description: "support h4ks, get some merch!"
+    host: "h4kshop"
+    port: 2222
+
   - name: "hanb"
     description: "hanb shell"
     host: "hanb"

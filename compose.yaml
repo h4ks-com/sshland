@@ -3,6 +3,7 @@ networks:
     internal: true
   tobby-egress: {}
   h4kmally-egress: {}
+  h4kshop-egress: {}
 
 volumes:
   sshchat_data:
@@ -170,6 +171,36 @@ services:
           memory: 256m
           cpus: "0.5"
           pids: 100
+
+  h4kshop:
+    build:
+      context: .
+      dockerfile: docker/h4kshop/Dockerfile
+    environment:
+      SSH_HOST_KEY_PATH: /tmp/sshland/host_key
+      SSH_LISTEN_ADDR: "0.0.0.0:2222"
+      PROXY_KEY_PATH: /proxy_key/key
+      SHOP_API_URL: "${SHOP_API_URL:-https://shop.h4ks.com}"
+      # Defaults to SHOP_API_URL when unset; override only if the public-facing
+      # origin differs from the API origin.
+      SHOP_PUBLIC_URL: "${SHOP_PUBLIC_URL:-}"
+    volumes:
+      - proxy_key:/proxy_key:ro
+    tmpfs:
+      - /tmp
+    read_only: true
+    networks:
+      - mesh
+      - h4kshop-egress
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          cpus: "0.1"
+          pids: 50
 
   asshteroids:
     build:

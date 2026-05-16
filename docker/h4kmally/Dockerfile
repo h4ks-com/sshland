@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
@@ -27,4 +27,5 @@ EXPOSE 2222
 
 ENTRYPOINT ["wrapper", "/usr/local/bin/tui-agar", \
   "-name", "{username}", \
-  "-server", "wss://api.sigmally.h4ks.com/ws/"]
+  "-server", "wss://api.sigmally.h4ks.com/ws/", \
+  "-sync"]

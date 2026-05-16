@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS go-builder
+FROM golang:1.25-alpine AS go-builder
 
 WORKDIR /build
 
@@ -8,7 +8,7 @@ RUN go mod download
 COPY . .
 RUN go build -o /build/movies-bin ./movies/
 
-FROM golang:1.24-alpine AS ascii-movie-builder
+FROM golang:1.25-alpine AS ascii-movie-builder
 
 RUN CGO_ENABLED=0 go install gabe565.com/ascii-movie@latest
 # sw1 (Star Wars) is embedded in the ascii-movie binary; no download needed.
