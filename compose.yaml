@@ -152,6 +152,9 @@ services:
       SSH_HOST_KEY_PATH: /tmp/sshland/host_key
       SSH_LISTEN_ADDR: "0.0.0.0:2222"
       PROXY_KEY_PATH: /proxy_key/key
+      IRC_SERVER: "${IRC_SERVER:-irc.h4ks.com}"
+      IRC_PORT: "${IRC_PORT:-6697}"
+      IRC_CHANNEL: "${IRC_CHANNEL:-#dev}"
     volumes:
       - tobby_data:/data
       - proxy_key:/proxy_key:ro
